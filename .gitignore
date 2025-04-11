@@ -1,0 +1,5 @@
+versions
+venv
+mold
+compress.map
+rev_list
