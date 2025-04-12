@@ -1,206 +1,117 @@
 #!/usr/bin/env python
 
+import argparse
+import configparser
+from enum import Enum
+from typing import Optional
 from git import Repo
 import os
 import subprocess
 import sys
 import time
 
-#############################################
-#               Configuration               #
-#############################################
-# The path to your Godot workspace. Can be absolute or relative to the BiMon directory.
-WORKSPACE_PATH = "../godot"
-# The earliest commit you care about. This is used to fetch the commit list and to bookend
-START_COMMIT =  "4.0-stable" # The earliest commit you care about
-ENABLE_DYNAMIC_LIBS = True # Use builtin_*=no compiler flags. Requires the libs to be installed.
-ENABLE_SHORTCUTS = False # Enable system wide keyboard shortcuts. Requires running as root.
-EXIT_AFTER_THIS_HOTKEY = "ctrl+e"
-MARK_GOOD_HOTKEY = "ctrl+g"
-MARK_BAD_HOTKEY = "ctrl+b"
-REVISION_DENSITY = 1
+import "src/storage.py"
 
-# The following values have been specifically chosen
-# and should not be changed unless you know what you're doing
-COMPRESS_PACK_SIZE = 20
-COMPILER_FLAGS = "platform=linuxbsd use_llvm=yes linker=mold dev_build=no scu_build=yes optimize=none"
-LIBRARY_FLAGS = (
-  "builtin_enet=no builtin_libogg=no builtin_libtheora=no builtin_libvorbis=no builtin_libwebp=no" 
-  + " builtin_mbedtls=no builtin_miniupnpc=no builtin_pcre2=no builtin_zstd=no builtin_harfbuzz=no" 
-  + " builtin_libpng=no builtin_freetype=no builtin_graphite=no builtin_zlib=no"
-)
-COMPRESS_MAP = "compress.map"
+class PrintMode(Enum):
+    QUIET = 1
+    LIVE = 2
+    VERBOSE = 3
 
 _should_exit = False
 _is_good = False
 _is_bad = False
+_print_mode = PrintMode.LIVE
+
+
+############################################################
+#                      Initialization                      #
+############################################################
 
 
 def main():
-    if not os.path.exists(WORKSPACE_PATH):
-        print("The workspace path '{}' does not exist.".format(WORKSPACE_PATH))
+    if not os.path.exists(Configuration.WORKSPACE_PATH):
+        print(f"The workspace path '{Configuration.WORKSPACE_PATH}' does not exist.")
         sys.exit(1)
-    if not os.path.exists("versions"):
-        os.mkdir("versions")
-    if ENABLE_SHORTCUTS:
-        import keyboard
-        keyboard.add_hotkey(EXIT_AFTER_THIS_HOTKEY, mark_exit)
-
+    if not os.path.exists(VERSIONS_DIR):
+        os.mkdir(VERSIONS_DIR)
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
-    if len(sys.argv) not in [2, 3]:
-        print("Usage: bimon.py [function]")
+
+    if len(sys.argv) < 2:
+        print_short_help()
         sys.exit(1)
-    function = sys.argv[1]
-    if function == "bisect":
-        bisect(sys.argv[2])
-    elif function == "update":
-        update(sys.argv[2] if len(sys.argv) >= 3 else None)
-    elif function == "compile":
-        compile_entry(sys.argv[2] if len(sys.argv) >= 3 else None)
-    elif function == "fetch":
-        fetch()
-    elif function == "purge":
-        purge()
-    elif function == "compress":
-        compress()
-    elif function == "help":
-        print("Porcelain commands:")
-        print("  update [cut_rev] - Fetch and compile missing commits, working back from [cut_rev]. Defaults to the latest.")
-        print("  bisect [project] - Bisect history to find a regression's commit.")
-        print("  purge - Delete any uncompressed binaries that are also present in compressed form.")
-        print("  help - Show this help message.")
-        print()
-        print("Plumbing commands:")
-        print("  fetch - Fetch the latest commits.")
-        print("  compile [rev] - Compile and store a specific rev. Defaults to HEAD.")
-        print("  compress - Pack completed bundles.")
-    else:
-        print("Unknown function {}. See help for options.".format(function))
-        sys.exit(1)
+    
+    process_command_and_arguments()
 
 
-def get_diff_size(commit1, commit2):
-    diff = os.popen("git -C {} diff {}..{} --stat".format(WORKSPACE_PATH, commit1, commit2)).read()
-    lines = sum([line.split(",") for line in diff.split("\n")], [])
-    size = 0
-    for line in lines:
-        if line.strip() == "":
-            continue
-        if "insertions(+)" in line or "deletions(-)" in line:
-            size += int(line.split()[0])
-    return size
+def process_command_and_arguments():
+    parser = argparse.ArgumentParser(description="BiMon: A tool for speeding up bisecting during bug triage for the Godot engine bugsquad.")
+    parser.add_argument("-q", "--quiet", action="store_const", const=PrintMode.QUIET, dest="print_mode", help="Quiet mode hides output from long-running subprocesses.")
+    parser.add_argument("-v", "--verbose", action="store_const", const=PrintMode.VERBOSE, dest="print_mode", help="Verbose mode prints output from subprocesses.")
+    parser.add_argument("-l", "--live", action="store_const", const=PrintMode.LIVE, dest="print_mode", help="Live mode shows a live updating display of subprocess output.")
+    parser.set_defaults(print_mode=PrintMode.LIVE if sys.stdout.isatty() else PrintMode.VERBOSE)
+
+    subparsers = parser.add_subparsers(dest="command", required=True, help="Available commands")
+
+    # Porcelain commands
+    update_parser = subparsers.add_parser("update", help="Fetch, compile, and cache missing commits.")
+    update_parser.add_argument("-f", "--force", action="store_true", help="Discard uncommitted changes in the workspace directory.")
+    update_parser.add_argument("-n", type=int, help="Only compile and cache 1 in every N commits.")
+    update_parser.add_argument("cut_rev", nargs="?", help="The revision to start working back from.")
+    update_parser.set_defaults(func=lambda args: update_command(args.force, args.n, args.cut_rev, args.print_mode))
+
+    bisect_parser = subparsers.add_parser("bisect", help="Bisect history to find a regression's commit via an interactive mode.")
+    bisect_parser.add_argument("-d", "--discard", action="store_true", help="Prevent caching binaries compiled during a bisect.")
+    bisect_parser.add_argument("-c", "--cached-only", action="store_true", help="Prevent compiling at all during a bisect.")
+    bisect_parser.add_argument("project", nargs="?", help="Path to the project or project.godot file.")
+    bisect_parser.set_defaults(func=lambda args: bisect_command(args.discard, args.cache_only, args.project, args.print_mode))
+
+    extract_parser = subparsers.add_parser("extract", help="Extract the binary for a specific revision.")
+    extract_parser.add_argument("rev", help="The revision name to extract.")
+    extract_parser.add_argument("file_path", nargs="?", help="The file path to extract the binary to.")
+    extract_parser.set_defaults(func=lambda args: extract_command(args.rev, args.file_path, args.print_mode))
+
+    purge_parser = subparsers.add_parser("purge", help="Delete uncompressed binaries that are also present in compressed form.")
+    purge_parser.set_defaults(func=lambda args: purge_command(args.print_mode))
+
+    help_parser = subparsers.add_parser("help", help="Show help information.")
+    help_parser.set_defaults(func=lambda args: help_command())
+
+    # Plumbing commands
+    fetch_parser = subparsers.add_parser("fetch", help="Fetch the latest commits and update the processing lists.")
+    fetch_parser.set_defaults(func=lambda args: fetch_command(args.print_mode))
+
+    compile_parser = subparsers.add_parser("compile", help="Compile and store a specific revision.")
+    compile_parser.add_argument("rev", nargs="?", default="HEAD", help="The revision to compile. Defaults to HEAD.")
+    compile_parser.set_defaults(func=lambda args: compile_command(args.rev, args.print_mode))
+
+    compress_parser = subparsers.add_parser("compress", help="Pack completed bundles.")
+    compress_parser.add_argument("-n", type=int, help="Allow gaps of size N - 1 while bundling.")
+    compress_parser.set_defaults(func=lambda args: compress_command(args.print_mode, args.n))
+
+    args = parser.parse_args()
+    args.func(args)
 
 
-def compress():
-    rev_list = get_rev_list()
-    compress_map = read_compress_map()
-    to_compress = [rev for rev in rev_list if rev not in compress_map]
-    packs = [to_compress[i:i + COMPRESS_PACK_SIZE] for i in range(0, len(to_compress), COMPRESS_PACK_SIZE)]
-    packs = [pack for pack in packs if all(os.path.exists("versions/{}".format(commit)) for commit in pack)]
-
-    for i in range(len(packs)):
-        pack = packs[i]
-        pack_id = pack[0]
-        print("Compressing pack {} / {}: {}%".format(i + 1, len(packs), int(i / len(packs) * 100)))
-        if os.path.exists("versions/{}.tar.xz".format(pack_id)):
-            print("Pack {} already exists. Skipping.".format(pack_id))
-            to_compress = to_compress[COMPRESS_PACK_SIZE:]
-            continue
-        compress_result = os.system("tar cvf versions/{}.tar.xz -I 'xz -9 -T 2 --lzma2=dict=512M,mode=fast,mf=hc4 --memory=16G' {}".format(pack_id, " ".join(["versions/" + commit for commit in pack])))
-        if compress_result != 0:
-            print("Error while compressing pack {}.".format(pack_id))
-            sys.exit(1)
-        for commit in pack:
-            add_to_compress_map(commit, pack_id)
-            if os.path.exists("versions/" + commit):
-                os.remove("versions/" + commit)
-        to_compress = to_compress[COMPRESS_PACK_SIZE:]
-        if _should_exit:
-            break
+############################################################
+#                         Commands                         #
+############################################################
 
 
-def write_compress_map(compress_map):
-    with open(COMPRESS_MAP, "w") as f:
-        for key, value in compress_map.items():
-            f.write("{}\n{}\n".format(key, value))
+def update_command(force: bool, n: Optional[int], cut_rev: Optional[str], print_mode: PrintMode):
+    global _print_mode
+    _print_mode = print_mode
+    configure_exit_shortcut()
+    update(force, n if n is not None else 1, cut_rev)
 
 
-def read_compress_map():
-    if not os.path.exists(COMPRESS_MAP):
-        return {}
-    with open(COMPRESS_MAP, "r") as f:
-        lines = f.readlines()
-        compress_map = {}
-        for i in range(0, len(lines), 2):
-            key = lines[i].strip()
-            value = lines[i + 1].strip()
-            compress_map[key] = value
-    return compress_map
-
-
-def add_to_compress_map(commit, location):
-    compress_map = read_compress_map()
-    compress_map[commit] = location
-    write_compress_map(compress_map)
-
-
-def resolve_ref(ref):
-    try:
-        return subprocess.check_output(["git", "-C", WORKSPACE_PATH, "rev-parse", ref]).strip().decode("utf-8")
-    except subprocess.CalledProcessError:
-        return ""
-
-
-def query_rev_list(start_ref, end_ref):
-    try:
-        return [k.strip() for k in subprocess.check_output(["git", "-C", WORKSPACE_PATH, "rev-list", "--reverse", "{}..{}".format(start_ref, end_ref)]).strip().decode("utf-8").split() if k.strip() != ""]
-    except subprocess.CalledProcessError:
-        return []
-
-
-def get_rev_list():
-    with open("rev_list", "r") as f:
-        return [line.strip() for line in f.readlines() if len(line.strip()) > 0]
-
-
-def _get_present_commits():
-    return (
-        [version for version in os.listdir("versions") if '.' not in version]
-        + list(read_compress_map().keys())
-    )
-
-
-def _get_missing_commits():
-    rev_list = get_rev_list()
-    present_commits = set(_get_present_commits())
-    missing_commits = []
-    sequential_missing = 0
-    for i in range(len(rev_list)):
-        if rev_list[i] not in present_commits:
-            sequential_missing += 1
-        if sequential_missing >= REVISION_DENSITY:
-            missing_commits.append(rev_list[i])
-            sequential_missing = 0
-    return missing_commits
-
-
-def fetch():
-    print("Fetching...")
-    repo = Repo.init(WORKSPACE_PATH)
-    repo.remotes.origin.fetch()
-    os.system("git -C {} rev-list --reverse {}..origin/master > rev_list".format(WORKSPACE_PATH, START_COMMIT))
-
-    print("{} commits are waiting to be compiled.".format(len(_get_missing_commits())))
-
-
-def update(cut_commit=None):
-    fetch()
-    rev_list = get_rev_list()
-    missing_commits = list(_get_missing_commits()[::-1])
+def update(force: bool, n: int = 1, cut_commit: str = None):
+    fetch(n)
+    rev_list = storage.get_rev_list()
+    missing_commits = list(get_missing_commits(n)[::-1])
     if cut_commit is not None:
         cut_commit = resolve_ref(cut_commit.strip())
         if cut_commit == "":
-            print("Invalid cut commit {}.".format(cut_commit))
+            print(f"Invalid cut commit {cut_commit}.")
             sys.exit(1)
         cut = rev_list.index(cut_commit)
         while cut > 0 and rev_list[cut] not in missing_commits:
@@ -218,28 +129,71 @@ def update(cut_commit=None):
     compile(missing_commits, should_compress=True)
 
 
-def compile_entry(commit=None):
-    commit = resolve_ref(commit if commit else "HEAD")
+def bisect_command(discard: bool, cache_only: bool, project: Optional[str], print_mode: PrintMode):
+    global _print_mode
+    _print_mode = print_mode
+    # TODO ignores print mode
+    bisect(project)
+
+
+def bisect(project):
+    pass
+
+
+def extract_command(rev: str, file_path: Optional[str], print_mode: PrintMode):
+    global _print_mode
+    _print_mode = print_mode
+    # TODO ignores print mode
+    storage.extract_commit(rev, file_path if file_path else os.path.join(VERSIONS_DIR, rev))
+
+
+def purge_command(print_mode: PrintMode):
+    global _print_mode
+    _print_mode = print_mode
+    purge_count = storage.purge_duplicate_files({resolve_ref(Configuration.START_COMMIT)})
+    print(f"Purged {purge_count} files.")
+
+
+def fetch_command(print_mode: PrintMode):
+    global _print_mode
+    _print_mode = print_mode
+    fetch()
+
+
+def fetch(n: int = 1):
+    print("Fetching...")
+    repo = Repo.init(Configuration.WORKSPACE_PATH)
+    repo.remotes.origin.fetch()
+    os.system(f"git -C {Configuration.WORKSPACE_PATH} rev-list --reverse {Configuration.START_COMMIT}..origin/master > {REV_LIST}")
+
+    print(f"{len(_get_missing_commits(n))} commits are waiting to be compiled.")
+
+
+def compile_command(rev: str, print_mode: PrintMode):
+    global _print_mode
+    _print_mode = print_mode
+    configure_exit_shortcut()
+    commit = resolve_ref(rev)
     compile([commit], should_compress=True)
 
 
-def compile(commits, should_compress=False):
+def compile(commits, should_compress: bool = True):
     start_time = time.time()
     times = []
     for i, commit in enumerate(commits):
-        print("({} / {}: {}%) Compiling commit {}".format(i + 1, len(commits), int(i / len(commits) * 100), commit))
+        print(f"({i + 1} / {len(commits)}: {int(i / len(commits) * 100)}%) Compiling commit {commit}")
         print("Times:", times)
-        os.system("(cd {} && git checkout {})".format(WORKSPACE_PATH, commit))
+        os.system(f"(cd {Configuration.WORKSPACE_PATH} && git checkout {commit})")
         error_code = single()
         if error_code != 0:
-            print("Error while compiling commit {}. Skipping.".format(commit))
+            print(f"Error while compiling commit {commit}. Skipping.")
             time.sleep(0.1)
             start_time = time.time()
             continue
         cache(commit)
         times.append((commit, time.time() - start_time))
 
-        if i % (COMPRESS_PACK_SIZE * 2) == 0 and i > 0 and not _should_exit and should_compress:
+        if i % (Configuration.COMPRESS_PACK_SIZE * 2) == 0 and i > 0 and not _should_exit and should_compress:
             compress()
 
         start_time = time.time()
@@ -250,129 +204,138 @@ def compile(commits, should_compress=False):
         compress()
 
 
-def single():
-    flags = COMPILER_FLAGS
-    if ENABLE_DYNAMIC_LIBS:
-        flags += " " + LIBRARY_FLAGS
-    return os.system("(cd {} && scons {})".format(WORKSPACE_PATH, flags))
+def compress_command(print_mode: PrintMode, n: Optional[int]):
+    global _print_mode
+    _print_mode = print_mode
+    configure_exit_shortcut()
+    compress(n if n is not None else 1)
+
+
+def compress(n: int = 1):
+    bundles = compute_bundles(n)
+    for i, bundle in enumerate(bundles):
+        bundle_id = bundle[0]
+        print(f"Compressing bundle {i + 1} / {len(bundle)}: {int(i / len(bundle) * 100)}%")
+        bundled = storage.compress_bundle(bundle_id, bundle)
+        if not bundled:
+            print(f"Error while compressing bundle {bundle_id}.")
+            sys.exit(1)
+        if _should_exit:
+            break
+
+
+def help_command():
+    # TODO
+    print("""Usage: bimon.py [-q/--quiet] [-v/--verbose] [-l/--live] COMMAND [COMMAND_ARG...]""")
+    
+def print_short_help():
+    # TODO
+    print("""Usage: bimon.py [-q/--quiet] [-v/--verbose] [-l/--live] COMMAND [COMMAND_ARG...]""")
+    
+
+
+###########################################################
+#                        Utilities                        #
+###########################################################
+
+
+def configure_exit_shortcut():
+    if Configuration.ENABLE_SHORTCUTS:
+        import keyboard
+        keyboard.add_hotkey(Configuration.EXIT_AFTER_THIS_HOTKEY, mark_exit)
+
+
+def compute_bundles(unbundled_versions: list, n: int):
+    rev_list = storage.get_rev_list()
+    compress_map = storage.read_compress_map()
+    unbundled_versions = [rev for rev in rev_list if rev not in compress_map]
+    ready_to_bundle = storage.get_unbundled_files()
+    bundle_start_i = 0
+    bundles = []
+    while bundle_start_i < len(unbundled_versions):
+        if unbundled_versions[bundle_start_i] not in ready_to_bundle:
+            bundle_start_i += 1
+            continue
+        bundle = [ready_to_bundle[bundle_start_i]]
+        not_ready_seen = 0
+        bundle_start_i += 1
+        bad_bundle = False
+        while bundle_start_i < len(unbundled_versions):
+            if unbundled_versions[bundle_start_i] in ready_to_bundle:
+                not_ready_seen = 0
+                bundle.append(unbundled_versions[bundle_start_i])
+                if len(bundle) >= COMPRESS_PACK_SIZE:
+                    break
+            else:
+                not_ready_seen += 1
+                if not_ready_seen >= n:
+                    bad_bundle = True
+                    break
+            bundle_start_i += 1
+        
+        if not bad_bundle:
+            bundles.append(bundle)
+
+    return bundles
+
+
+def resolve_ref(ref):
+    try:
+        return subprocess.check_output(["git", "-C", WORKSPACE_PATH, "rev-parse", ref]).strip().decode("utf-8")
+    except subprocess.CalledProcessError:
+        return ""
+
+
+def query_rev_list(start_ref, end_ref):
+    try:
+        return [k.strip() for k in subprocess.check_output(["git", "-C", WORKSPACE_PATH, "rev-list", "--reverse", f"{start_ref}..{end_ref}"]).strip().decode("utf-8").split() if k.strip() != ""]
+    except subprocess.CalledProcessError:
+        return []
+
+
+def get_missing_commits(n):
+    rev_list = storage.get_rev_list()
+    present_commits = set(storage.get_present_commits())
+    missing_commits = []
+    sequential_missing = 0
+    for i in range(len(rev_list)):
+        if rev_list[i] not in present_commits:
+            sequential_missing += 1
+        if sequential_missing >= n:
+            missing_commits.append(rev_list[i])
+            sequential_missing = 0
+    return missing_commits
 
 
 def cache(current_commit=None):
     if current_commit is None:
-        current_commit = os.popen("git -C {} rev-parse HEAD".format(WORKSPACE_PATH)).read().strip()
-    print("Caching commit {}".format(current_commit))
+        current_commit = os.popen(f"git -C {WORKSPACE_PATH} rev-parse HEAD").read().strip()
+    print(f"Caching commit {current_commit}")
     compiled_path = os.path.join(WORKSPACE_PATH, "bin", "godot.linuxbsd.editor.x86_64.llvm")
-    storage_path = os.path.join("versions", "{}".format(current_commit))
-    os.system("mv {} {}".format(compiled_path, storage_path))
-    os.system("chmod +x {}".format(storage_path))
+    storage_path = os.path.join("versions", current_commit)
+    os.system(f"mv {compiled_path} {storage_path}")
+    os.system(f"chmod +x {storage_path}")
 
 
-def ask_for_commit(query_text):
-    bad_commit = input(query_text)
-    bad_commit = resolve_ref(bad_commit.strip())
-    if bad_commit == "":
-        print("Invalid commit.")
-        return False
-    return True
+def single():
+    flags = COMPILER_FLAGS
+    if ENABLE_DYNAMIC_LIBS:
+        flags += " " + LIBRARY_FLAGS
+    return os.system(f"(cd {WORKSPACE_PATH} && scons {flags})")
 
 
-def purge():
-    purge_count = 0
-    compress_map = read_compress_map()
-    start_commit = resolve_ref(START_COMMIT)
-    for path in os.listdir("versions"):
-        if path in compress_map and path != start_commit:
-            os.remove(os.path.join("versions", path))
-            purge_count += 1
-
-    print("Purged {} files.".format(purge_count))
-
+###########################################################
+#                         Hotkeys                         #
+###########################################################
 
 
 def mark_exit():
     _should_exit = True
 
 
-def mark_good():
-    # TODO close project if open
-    _is_good = True
-
-
-def mark_bad():
-    # TODO close project if open
-    _is_bad = True
-
-
-def bisect(project):
-    # TODO respect _should_exit
-    if ENABLE_SHORTCUTS:
-        import keyboard
-        keyboard.add_hotkey(MARK_GOOD_HOTKEY, mark_good)
-        keyboard.add_hotkey(MARK_BAD_HOTKEY, mark_bad)
-    present_commits = _get_present_commits()
-    compress_map = read_compress_map()
-    rev_list = get_rev_list()
-    if len(rev_list) == 0:
-        print("No revisions to bisect.")
-        sys.exit(1)
-    start = rev_list[0]
-    end = rev_list[-1]
-
-    while start + 1 < end:
-        command = input("Please enter a command ([s]tart, [g]ood, [b]ad, [l]ist): ")
-        if command.lower().startswith("s"):
-            # TODO find a mid with a commit that is present
-            mid = (start + end) // 2
-            launch_commit(rev_list[mid], project)
-            was_good = False
-            if ENABLE_SHORTCUTS:
-                print("Waiting for hotkey...")
-                while not _is_good and not _is_bad:
-                    time.sleep(0.05)
-                was_good = _is_good
-            while True:
-                result = input("How did it go? ([g]ood, [b]ad): ")
-                if result.lower().startswith("g"):
-                    was_good = True
-                    break
-                elif result.lower().startswith("b"):
-                    was_good = False
-                    break
-                print("Invalid choice.")
-        elif command.lower().startswith("g"):
-            good_commit = ask_for_commit("Enter the good commit: ")
-            good_index = max([-1] + [i for i, rev in enumerate(rev_list) if rev.startswith(good_commit)])
-            if good_index < 0:
-                print("Invalid commit.")
-                continue
-            if good_index >= end:
-                print("No possible range exists.")
-                continue
-            start = max(start, good_index)
-        elif command.lower().startswith("b"):
-            bad_commit = ask_for_commit("Enter the bad commit: ")
-            bad_index = max([-1] + [i for i, rev in enumerate(rev_list) if rev.startswith(bad_commit)])
-            if bad_index < 0:
-                print("Invalid commit.")
-                continue
-            if bad_index <= start:
-                print("No possible range exists.")
-                continue
-            end = min(end, bad_index)
-        elif command.lower().startswith("l"):
-            print("{}..{}".format(rev_list[start], rev_list[end - 1]))
-        else:
-            print("Invalid command.")
-            continue
-
-
-def launch_commit(commit, project):
-    if os.path.exists("godot"):
-        os.remove("godot")
-        
-    with py7zr.SevenZipFile("versions/{}.7z".format(commit), mode='r') as archive:
-        archive.extract(targets=["godot"])
-    os.system("./godot {}".format(project))
+###########################################################
+#                                                         #
+###########################################################
 
 
 if __name__ == "__main__":
