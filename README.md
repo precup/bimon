@@ -109,6 +109,7 @@ Once the editor opens, you should attempt to reproduce the bug. Then, either hit
 - better help command
 - better fault tolerance
 - check which arguments are required and which aren't
+- double ctrl C instead of should_exit
 
 0 / 22
 - better output, support printmode

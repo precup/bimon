@@ -1,8 +1,5 @@
 from typing import Optional
-try:
-    from "../config.py" import Configuration
-except ImportError:
-    from "../default_config.py" import Configuration
+from config import Configuration
 
 _should_pause = False
 _is_good = False

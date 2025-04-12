@@ -1,9 +1,19 @@
 import os
 import shutil
+from pathlib import Path
 
 COMPRESS_MAP = "compress_map"
 REV_LIST = "rev_list"
 VERSIONS_DIR = "versions"
+
+def init_storage() -> None:
+    if not os.path.exists(VERSIONS_DIR):
+        os.mkdir(VERSIONS_DIR)
+    if not os.path.exists(COMPRESS_MAP):
+        Path(COMPRESS_MAP).touch()
+    if not os.path.exists(REV_LIST):
+        Path(REV_LIST).touch()
+
 
 def write_compress_map(compress_map: dict[str, str]) -> None:
     with open(COMPRESS_MAP, "w") as f:

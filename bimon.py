@@ -2,26 +2,28 @@
 
 import argparse
 import configparser
-from enum import Enum
-from typing import Optional
-from git import Repo
 import os
 import subprocess
 import sys
 import time
 
-import "src/storage.py"
+from enum import Enum
+from git import Repo
+from typing import Optional
+
+import src.signal_handler
+import src.storage
+
+from src.config import Configuration
 
 class PrintMode(Enum):
     QUIET = 1
     LIVE = 2
     VERBOSE = 3
 
-_should_exit = False
-_is_good = False
-_is_bad = False
 _print_mode = PrintMode.LIVE
 
+WORKSPACE = Configuration.WORKSPACE_PATH
 
 ############################################################
 #                      Initialization                      #
@@ -29,12 +31,17 @@ _print_mode = PrintMode.LIVE
 
 
 def main():
-    if not os.path.exists(Configuration.WORKSPACE_PATH):
-        print(f"The workspace path '{Configuration.WORKSPACE_PATH}' does not exist.")
-        sys.exit(1)
-    if not os.path.exists(VERSIONS_DIR):
-        os.mkdir(VERSIONS_DIR)
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
+    storage.init_storage()
+    signal_handler.install()
+    if not os.path.exists(WORKSPACE):
+        print(f"BiMon requires a Godot workspace at path '{WORKSPACE}'.")
+        clone_response = input(f"Clone one there now? (y/n): ").strip().lower()
+        if clone_response.startswith('y'):
+            os.system(f"git clone https://github.com/godotengine/godot.git {WORKSPACE}")
+        else:
+            print("BiMon requires a Godot workspace to function. Exiting.")
+            sys.exit(1)
 
     if len(sys.argv) < 2:
         print_short_help()
@@ -100,11 +107,10 @@ def process_command_and_arguments():
 def update_command(force: bool, n: Optional[int], cut_rev: Optional[str], print_mode: PrintMode):
     global _print_mode
     _print_mode = print_mode
-    configure_exit_shortcut()
     update(force, n if n is not None else 1, cut_rev)
 
 
-def update(force: bool, n: int = 1, cut_commit: str = None):
+def update(force: bool, n: int, cut_commit: str):
     fetch(n)
     rev_list = storage.get_rev_list()
     missing_commits = list(get_missing_commits(n)[::-1])
@@ -113,18 +119,16 @@ def update(force: bool, n: int = 1, cut_commit: str = None):
         if cut_commit == "":
             print(f"Invalid cut commit {cut_commit}.")
             sys.exit(1)
+
         cut = rev_list.index(cut_commit)
         while cut > 0 and rev_list[cut] not in missing_commits:
             cut -= 1
-        if cut >= 0:
-            cut = missing_commits.index(rev_list[cut])
-    else:
-        cut = len(missing_commits)
+        if cut < 0:
+            print("Unknown cut commit.")
+            sys.exit(1)
 
-    if cut < 0:
-        print("Unknown cut commit.")
-        sys.exit(1)
-    missing_commits = missing_commits[cut:] + missing_commits[:cut]
+        cut = missing_commits.index(rev_list[cut])
+        missing_commits = missing_commits[cut:] + missing_commits[:cut]
 
     compile(missing_commits, should_compress=True)
 
@@ -162,9 +166,9 @@ def fetch_command(print_mode: PrintMode):
 
 def fetch(n: int = 1):
     print("Fetching...")
-    repo = Repo.init(Configuration.WORKSPACE_PATH)
+    repo = Repo.init(WORKSPACE)
     repo.remotes.origin.fetch()
-    os.system(f"git -C {Configuration.WORKSPACE_PATH} rev-list --reverse {Configuration.START_COMMIT}..origin/master > {REV_LIST}")
+    os.system(f"git -C {WORKSPACE} rev-list --reverse {Configuration.START_COMMIT}..origin/master > {REV_LIST}")
 
     print(f"{len(_get_missing_commits(n))} commits are waiting to be compiled.")
 
@@ -172,7 +176,6 @@ def fetch(n: int = 1):
 def compile_command(rev: str, print_mode: PrintMode):
     global _print_mode
     _print_mode = print_mode
-    configure_exit_shortcut()
     commit = resolve_ref(rev)
     compile([commit], should_compress=True)
 
@@ -183,7 +186,7 @@ def compile(commits, should_compress: bool = True):
     for i, commit in enumerate(commits):
         print(f"({i + 1} / {len(commits)}: {int(i / len(commits) * 100)}%) Compiling commit {commit}")
         print("Times:", times)
-        os.system(f"(cd {Configuration.WORKSPACE_PATH} && git checkout {commit})")
+        os.system(f"(cd {WORKSPACE} && git checkout {commit})")
         error_code = single()
         if error_code != 0:
             print(f"Error while compiling commit {commit}. Skipping.")
@@ -193,21 +196,20 @@ def compile(commits, should_compress: bool = True):
         cache(commit)
         times.append((commit, time.time() - start_time))
 
-        if i % (Configuration.COMPRESS_PACK_SIZE * 2) == 0 and i > 0 and not _should_exit and should_compress:
+        if i % (Configuration.COMPRESS_PACK_SIZE * 2) == 0 and i > 0 and not signal_handler.SHOULD_EXIT and should_compress:
             compress()
 
         start_time = time.time()
-        if _should_exit:
+        if signal_handler.SHOULD_EXIT:
             break
 
-    if not _should_exit and should_compress:
+    if not signal_handler.SHOULD_EXIT and should_compress:
         compress()
 
 
 def compress_command(print_mode: PrintMode, n: Optional[int]):
     global _print_mode
     _print_mode = print_mode
-    configure_exit_shortcut()
     compress(n if n is not None else 1)
 
 
@@ -220,7 +222,7 @@ def compress(n: int = 1):
         if not bundled:
             print(f"Error while compressing bundle {bundle_id}.")
             sys.exit(1)
-        if _should_exit:
+        if signal_handler.SHOULD_EXIT:
             break
 
 
@@ -237,12 +239,6 @@ def print_short_help():
 ###########################################################
 #                        Utilities                        #
 ###########################################################
-
-
-def configure_exit_shortcut():
-    if Configuration.ENABLE_SHORTCUTS:
-        import keyboard
-        keyboard.add_hotkey(Configuration.EXIT_AFTER_THIS_HOTKEY, mark_exit)
 
 
 def compute_bundles(unbundled_versions: list, n: int):
@@ -281,14 +277,14 @@ def compute_bundles(unbundled_versions: list, n: int):
 
 def resolve_ref(ref):
     try:
-        return subprocess.check_output(["git", "-C", WORKSPACE_PATH, "rev-parse", ref]).strip().decode("utf-8")
+        return subprocess.check_output(["git", "-C", WORKSPACE, "rev-parse", ref]).strip().decode("utf-8")
     except subprocess.CalledProcessError:
         return ""
 
 
 def query_rev_list(start_ref, end_ref):
     try:
-        return [k.strip() for k in subprocess.check_output(["git", "-C", WORKSPACE_PATH, "rev-list", "--reverse", f"{start_ref}..{end_ref}"]).strip().decode("utf-8").split() if k.strip() != ""]
+        return [k.strip() for k in subprocess.check_output(["git", "-C", WORKSPACE, "rev-list", "--reverse", f"{start_ref}..{end_ref}"]).strip().decode("utf-8").split() if k.strip() != ""]
     except subprocess.CalledProcessError:
         return []
 
@@ -309,28 +305,16 @@ def get_missing_commits(n):
 
 def cache(current_commit=None):
     if current_commit is None:
-        current_commit = os.popen(f"git -C {WORKSPACE_PATH} rev-parse HEAD").read().strip()
+        current_commit = os.popen(f"git -C {WORKSPACE} rev-parse HEAD").read().strip()
     print(f"Caching commit {current_commit}")
-    compiled_path = os.path.join(WORKSPACE_PATH, "bin", "godot.linuxbsd.editor.x86_64.llvm")
+    compiled_path = os.path.join(WORKSPACE, "bin", "godot.linuxbsd.editor.x86_64.llvm")
     storage_path = os.path.join("versions", current_commit)
     os.system(f"mv {compiled_path} {storage_path}")
     os.system(f"chmod +x {storage_path}")
 
 
 def single():
-    flags = COMPILER_FLAGS
-    if ENABLE_DYNAMIC_LIBS:
-        flags += " " + LIBRARY_FLAGS
-    return os.system(f"(cd {WORKSPACE_PATH} && scons {flags})")
-
-
-###########################################################
-#                         Hotkeys                         #
-###########################################################
-
-
-def mark_exit():
-    _should_exit = True
+    return os.system(f"(cd {WORKSPACE} && scons {Configuration.COMPILER_FLAGS})")
 
 
 ###########################################################
