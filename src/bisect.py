@@ -5,16 +5,16 @@ _should_pause = False
 _is_good = False
 _is_bad = False
 
-def _mark_pause():
+def _mark_pause() -> None:
     _should_pause = True
 
 
-def _mark_good():
+def _mark_good() -> None:
     # TODO close project if open
     _is_good = True
 
 
-def _mark_bad():
+def _mark_bad() -> None:
     # TODO close project if open
     _is_bad = True
 
@@ -32,11 +32,13 @@ def bisect(discard: bool, cache_only: bool, project: Optional[str], verbose: boo
         keyboard.add_hotkey(Configuration.MARK_GOOD_HOTKEY, _mark_good)
         keyboard.add_hotkey(Configuration.MARK_BAD_HOTKEY, _mark_bad)
         keyboard.add_hotkey(Configuration.EXIT_AFTER_THIS_HOTKEY, _mark_pause)
+    if "github.com/godotengine/godot" in project:
     print("Entering bisect interactive mode. Type 'help' for a list of commands.")
     started = False
     current_revision = None
-    last_good_revision = None
-    last_bad_revision = None
+    good_revisions = set()
+    bad_revisions = set()
+    skipped_revisions = set()
 
     while True:
         try:
@@ -74,7 +76,7 @@ def bisect(discard: bool, cache_only: bool, project: Optional[str], verbose: boo
             break
 
 
-def launch_commit(commit, project):
+def launch_commit(commit: str, project: str) -> None:
     if os.path.exists("godot"):
         os.remove("godot")
         

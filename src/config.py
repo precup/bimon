@@ -24,17 +24,14 @@ class Configuration:
     WORKSPACE_PATH = config.get("General", "workspace_path")
 
     # Hotkey settings
-    ENABLE_HOTKEYS = config.getboolean("General", "enable_hotkeys")
-    MARK_GOOD_HOTKEY = config.get("General", "mark_good")
-    MARK_BAD_HOTKEY = config.get("General", "mark_bad")
+    ENABLE_HOTKEYS = config.getboolean("Hotkeys", "enable_hotkeys")
+    MARK_GOOD_HOTKEY = config.get("Hotkeys", "mark_good")
+    MARK_BAD_HOTKEY = config.get("Hotkeys", "mark_bad")
 
     # Compression settings
     COMPRESS_PACK_SIZE = config.getint("Compression", "pack_size")
 
     # Compilation settings
     COMPILER_FLAGS = config.get("Compilation", "compiler_flags")
-    if config.getboolean("Compilation", "enable_dynamic_libs"):
-        COMPILER_FLAGS += config.get("Compilation", "library_flags")
-
-    # Storage settings
-    COMPRESS_MAP = config.get("Storage", "compress_map")
+    COMPILER_FLAGS += " " + config.get("Compilation", "library_flags")
+    BINARY_NAME = config.get("Compilation", "binary_name")

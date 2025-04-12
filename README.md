@@ -1,18 +1,18 @@
 # Godot BiMon
-BiMon is a tool for speeding up bisecting during bug triage for the Godot engine bugsquad.
+BiMon is a tool for speeding up bug triage for the Godot engine bugsquad. It has some nice convenience features, but the really major selling point is ability to precompile and cache godot binaries.
 
-Using git bisect to find regressions is extremely inefficient even on a decent computer. Before I optimized my build times, a clean build took about 10 minutes on my computer. Even after optimizing, it takes about 5 minutes. During bisection, most commits used will be far from each other, so my average compile time during a bisect was about 3 minutes. Bisecting from 4.0-stable to 4.5-dev1 takes about 14 bisections, which meant that bisecting a single bug involved upwards of 30 minutes of just waiting on compiles. 
+Compiling repeatedly during bisection is inefficient even on a fairly beefy computer. Even after optimizing my build time as much as I could, it still takes about 2 minutes for clean build. Bisecting from 4.0-stable to 4.5-dev1 takes about 14 bisections, which meant that bisecting a single bug involved upwards of 20 minutes of just waiting on compiles. 
 
-Even if we assume a better computer, this time is clearly lopsided. For many bugs, actually checking whether a commit is good or bad once the project is built takes a matter of seconds, and even if compilation were 10x faster than on my machine it would still be the majority of the time spent.
+For many bugs, actually checking whether a commit is good or bad once the project is built takes a matter of seconds, and even if compilation were 10x faster than on my machine it would still be a relatively large slowdown to my workflow.
 
-The answer is simple: precompile commits so you can skip that time. BiMon also manages the bisection process to shave off further overhead.
+The answer is simple: precompile commits when you're not bisecting so you can skip that time when you are.
 
 ### How many commits get precompiled?
 I recommend running the initial compilation stage in two passes. BiMon supports having only a subset of commits precompiled, and during bisection it will narrow down the range as much as possible using precompiled versions first. Then, it will begin to compile the commits and add them to the cache so they can be used as future search points.
 
 This means you could precompile just 1 in N commits and only need to do an average of log2(N) compilations for a bisect. Then, as a second pass, you precompile *every* version walking back from HEAD. Recommended values of N are 128 or 64.
 
-That said, if you're particularly limited on storage or CPU, only running with the 
+That said, if you're limited on some resource, only running with the first phase works fine.
 
 ### What's the performance like?
 From 4.0-stable to 4.5-dev1, there are about 20k commits, so I'll be using that number in all my examples.
@@ -109,17 +109,24 @@ Once the editor opens, you should attempt to reproduce the bug. Then, either hit
 - better help command
 - better fault tolerance
 - check which arguments are required and which aren't
-- double ctrl C instead of should_exit
 
-0 / 22
-- better output, support printmode
-- warn the user if the most recent commit is pretty old
+- better output, colors, support printmode
 - Get venv and python deps handled actually correctly, update setup docs
-- config.py support
-- move the workspace to a subdir
-- time estimates, progress bar for compilation
+- time estimates, heat map, progress bar for compilation
+- Add --force
+- Add init command
+- support for git bisect's pathspec parameters
+- better error handling
+- Hotkey testing and support
+- Compiler output cannot be properly Ctrl C'd
+- Add no color flag for sad people
+- add repro command
+- add MRP downloading
+- vararg compile
 
-Commands
+Bisect
+- warn the user if the most recent commit is pretty old
+- handle going beyond the start and end commits
 - Add visualize subcommand
 - Add list subcommand
 - Add retry subcommand
@@ -128,11 +135,7 @@ Commands
 - Add abss subcommands, bisection framework
 - Add --cached-only
 - Add --discard
-- Add --force
-- support for git bisect's pathspec parameters
-
-- better error handling
-- Hotkey testing and support
 - partially cached bisection support
 - Launching
 - Autoextract nexts
+- add git-rev lookup info in addition to g and b info?

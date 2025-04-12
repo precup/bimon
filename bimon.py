@@ -8,11 +8,10 @@ import sys
 import time
 
 from enum import Enum
-from git import Repo
 from typing import Optional
 
-import src.signal_handler
-import src.storage
+import src.signal_handler as signal_handler
+import src.storage as storage
 
 from src.config import Configuration
 
@@ -30,7 +29,7 @@ WORKSPACE = Configuration.WORKSPACE_PATH
 ############################################################
 
 
-def main():
+def main() -> None:
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
     storage.init_storage()
     signal_handler.install()
@@ -50,7 +49,7 @@ def main():
     process_command_and_arguments()
 
 
-def process_command_and_arguments():
+def process_command_and_arguments() -> None:
     parser = argparse.ArgumentParser(description="BiMon: A tool for speeding up bisecting during bug triage for the Godot engine bugsquad.")
     parser.add_argument("-q", "--quiet", action="store_const", const=PrintMode.QUIET, dest="print_mode", help="Quiet mode hides output from long-running subprocesses.")
     parser.add_argument("-v", "--verbose", action="store_const", const=PrintMode.VERBOSE, dest="print_mode", help="Verbose mode prints output from subprocesses.")
@@ -104,13 +103,13 @@ def process_command_and_arguments():
 ############################################################
 
 
-def update_command(force: bool, n: Optional[int], cut_rev: Optional[str], print_mode: PrintMode):
+def update_command(force: bool, n: Optional[int], cut_rev: Optional[str], print_mode: PrintMode) -> None:
     global _print_mode
     _print_mode = print_mode
     update(force, n if n is not None else 1, cut_rev)
 
 
-def update(force: bool, n: int, cut_commit: str):
+def update(force: bool, n: int, cut_commit: str) -> None:
     fetch(n)
     rev_list = storage.get_rev_list()
     missing_commits = list(get_missing_commits(n)[::-1])
@@ -133,54 +132,53 @@ def update(force: bool, n: int, cut_commit: str):
     compile(missing_commits, should_compress=True)
 
 
-def bisect_command(discard: bool, cache_only: bool, project: Optional[str], print_mode: PrintMode):
+def bisect_command(discard: bool, cache_only: bool, project: Optional[str], print_mode: PrintMode) -> None:
     global _print_mode
     _print_mode = print_mode
     # TODO ignores print mode
     bisect(project)
 
 
-def bisect(project):
+def bisect(project) -> None:
     pass
 
 
-def extract_command(rev: str, file_path: Optional[str], print_mode: PrintMode):
+def extract_command(rev: str, file_path: Optional[str], print_mode: PrintMode) -> None:
     global _print_mode
     _print_mode = print_mode
     # TODO ignores print mode
     storage.extract_commit(rev, file_path if file_path else os.path.join(VERSIONS_DIR, rev))
 
 
-def purge_command(print_mode: PrintMode):
+def purge_command(print_mode: PrintMode) -> None:
     global _print_mode
     _print_mode = print_mode
     purge_count = storage.purge_duplicate_files({resolve_ref(Configuration.START_COMMIT)})
     print(f"Purged {purge_count} files.")
 
 
-def fetch_command(print_mode: PrintMode):
+def fetch_command(print_mode: PrintMode) -> None:
     global _print_mode
     _print_mode = print_mode
     fetch()
 
 
-def fetch(n: int = 1):
+def fetch(n: int = 1) -> None:
     print("Fetching...")
-    repo = Repo.init(WORKSPACE)
-    repo.remotes.origin.fetch()
-    os.system(f"git -C {WORKSPACE} rev-list --reverse {Configuration.START_COMMIT}..origin/master > {REV_LIST}")
+    os.system(f"git -C {WORKSPACE} fetch origin")
+    os.system(f"git -C {WORKSPACE} rev-list --reverse {Configuration.START_COMMIT}..origin/master > {storage.REV_LIST}")
 
-    print(f"{len(_get_missing_commits(n))} commits are waiting to be compiled.")
+    print(f"{len(get_missing_commits(n))} commits are waiting to be compiled.")
 
 
-def compile_command(rev: str, print_mode: PrintMode):
+def compile_command(rev: str, print_mode: PrintMode) -> None:
     global _print_mode
     _print_mode = print_mode
     commit = resolve_ref(rev)
     compile([commit], should_compress=True)
 
 
-def compile(commits, should_compress: bool = True):
+def compile(commits: list[str], should_compress: bool = True) -> None:
     start_time = time.time()
     times = []
     for i, commit in enumerate(commits):
@@ -207,13 +205,13 @@ def compile(commits, should_compress: bool = True):
         compress()
 
 
-def compress_command(print_mode: PrintMode, n: Optional[int]):
+def compress_command(print_mode: PrintMode, n: Optional[int]) -> None:
     global _print_mode
     _print_mode = print_mode
     compress(n if n is not None else 1)
 
 
-def compress(n: int = 1):
+def compress(n: int = 1) -> None:
     bundles = compute_bundles(n)
     for i, bundle in enumerate(bundles):
         bundle_id = bundle[0]
@@ -226,11 +224,11 @@ def compress(n: int = 1):
             break
 
 
-def help_command():
+def help_command() -> None:
     # TODO
     print("""Usage: bimon.py [-q/--quiet] [-v/--verbose] [-l/--live] COMMAND [COMMAND_ARG...]""")
     
-def print_short_help():
+def print_short_help() -> None:
     # TODO
     print("""Usage: bimon.py [-q/--quiet] [-v/--verbose] [-l/--live] COMMAND [COMMAND_ARG...]""")
     
@@ -241,7 +239,7 @@ def print_short_help():
 ###########################################################
 
 
-def compute_bundles(unbundled_versions: list, n: int):
+def compute_bundles(n: int) -> list[list[str]]:
     rev_list = storage.get_rev_list()
     compress_map = storage.read_compress_map()
     unbundled_versions = [rev for rev in rev_list if rev not in compress_map]
@@ -275,21 +273,21 @@ def compute_bundles(unbundled_versions: list, n: int):
     return bundles
 
 
-def resolve_ref(ref):
+def resolve_ref(ref: str) -> str:
     try:
         return subprocess.check_output(["git", "-C", WORKSPACE, "rev-parse", ref]).strip().decode("utf-8")
     except subprocess.CalledProcessError:
         return ""
 
 
-def query_rev_list(start_ref, end_ref):
+def query_rev_list(start_ref: str, end_ref: str) -> list[str]:
     try:
         return [k.strip() for k in subprocess.check_output(["git", "-C", WORKSPACE, "rev-list", "--reverse", f"{start_ref}..{end_ref}"]).strip().decode("utf-8").split() if k.strip() != ""]
     except subprocess.CalledProcessError:
         return []
 
 
-def get_missing_commits(n):
+def get_missing_commits(n: int) -> list[str]:
     rev_list = storage.get_rev_list()
     present_commits = set(storage.get_present_commits())
     missing_commits = []
@@ -303,17 +301,17 @@ def get_missing_commits(n):
     return missing_commits
 
 
-def cache(current_commit=None):
+def cache(current_commit: str = None) -> None:
     if current_commit is None:
         current_commit = os.popen(f"git -C {WORKSPACE} rev-parse HEAD").read().strip()
     print(f"Caching commit {current_commit}")
-    compiled_path = os.path.join(WORKSPACE, "bin", "godot.linuxbsd.editor.x86_64.llvm")
+    compiled_path = os.path.join(WORKSPACE, "bin", Configuration.BINARY_NAME)
     storage_path = os.path.join("versions", current_commit)
     os.system(f"mv {compiled_path} {storage_path}")
     os.system(f"chmod +x {storage_path}")
 
 
-def single():
+def single() -> int:
     return os.system(f"(cd {WORKSPACE} && scons {Configuration.COMPILER_FLAGS})")
 
 

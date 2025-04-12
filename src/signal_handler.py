@@ -3,7 +3,7 @@ import sys
 
 SHOULD_EXIT = False
 
-def _signal_handler(__sig, __frame):
+def _signal_handler(__sig, __frame) -> None:
     global SHOULD_EXIT
     if SHOULD_EXIT:
         print("Second kill signal received, exiting immediately...")
