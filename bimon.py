@@ -12,6 +12,7 @@ from typing import Optional
 
 import src.signal_handler as signal_handler
 import src.storage as storage
+import src.git as git
 
 from src.config import Configuration
 
@@ -86,9 +87,9 @@ def process_command_and_arguments() -> None:
     fetch_parser = subparsers.add_parser("fetch", help="Fetch the latest commits and update the processing lists.")
     fetch_parser.set_defaults(func=lambda args: fetch_command(args.print_mode))
 
-    compile_parser = subparsers.add_parser("compile", help="Compile and store a specific revision.")
-    compile_parser.add_argument("rev", nargs="?", default="HEAD", help="The revision to compile. Defaults to HEAD.")
-    compile_parser.set_defaults(func=lambda args: compile_command(args.rev, args.print_mode))
+    compile_parser = subparsers.add_parser("compile", help="Compile and store specific revisions.")
+    compile_parser.add_argument("revs", nargs="*", default="HEAD", help="The revisions to compile. Defaults to the workspace HEAD if none are provided.")
+    compile_parser.set_defaults(func=lambda args: compile_command(args.revs, args.print_mode))
 
     compress_parser = subparsers.add_parser("compress", help="Pack completed bundles.")
     compress_parser.add_argument("-n", type=int, help="Allow gaps of size N - 1 while bundling.")
@@ -114,7 +115,7 @@ def update(force: bool, n: int, cut_commit: str) -> None:
     rev_list = storage.get_rev_list()
     missing_commits = list(get_missing_commits(n)[::-1])
     if cut_commit is not None:
-        cut_commit = resolve_ref(cut_commit.strip())
+        cut_commit = git.resolve_ref(cut_commit.strip())
         if cut_commit == "":
             print(f"Invalid cut commit {cut_commit}.")
             sys.exit(1)
@@ -153,7 +154,7 @@ def extract_command(rev: str, file_path: Optional[str], print_mode: PrintMode) -
 def purge_command(print_mode: PrintMode) -> None:
     global _print_mode
     _print_mode = print_mode
-    purge_count = storage.purge_duplicate_files({resolve_ref(Configuration.START_COMMIT)})
+    purge_count = storage.purge_duplicate_files({git.resolve_ref(Configuration.START_COMMIT)})
     print(f"Purged {purge_count} files.")
 
 
@@ -171,11 +172,13 @@ def fetch(n: int = 1) -> None:
     print(f"{len(get_missing_commits(n))} commits are waiting to be compiled.")
 
 
-def compile_command(rev: str, print_mode: PrintMode) -> None:
+def compile_command(revs: list[str], print_mode: PrintMode) -> None:
     global _print_mode
     _print_mode = print_mode
-    commit = resolve_ref(rev)
-    compile([commit], should_compress=True)
+    if len(revs) == 0:
+        revs.append("HEAD")
+    commits = [git.resolve_ref(rev) for rev in revs]
+    compile(commits, should_compress=True)
 
 
 def compile(commits: list[str], should_compress: bool = True) -> None:
@@ -250,7 +253,7 @@ def compute_bundles(n: int) -> list[list[str]]:
         if unbundled_versions[bundle_start_i] not in ready_to_bundle:
             bundle_start_i += 1
             continue
-        bundle = [ready_to_bundle[bundle_start_i]]
+        bundle = [unbundled_versions[bundle_start_i]]
         not_ready_seen = 0
         bundle_start_i += 1
         bad_bundle = False
@@ -258,7 +261,7 @@ def compute_bundles(n: int) -> list[list[str]]:
             if unbundled_versions[bundle_start_i] in ready_to_bundle:
                 not_ready_seen = 0
                 bundle.append(unbundled_versions[bundle_start_i])
-                if len(bundle) >= COMPRESS_PACK_SIZE:
+                if len(bundle) >= Configuration.COMPRESS_PACK_SIZE:
                     break
             else:
                 not_ready_seen += 1
@@ -273,27 +276,15 @@ def compute_bundles(n: int) -> list[list[str]]:
     return bundles
 
 
-def resolve_ref(ref: str) -> str:
-    try:
-        return subprocess.check_output(["git", "-C", WORKSPACE, "rev-parse", ref]).strip().decode("utf-8")
-    except subprocess.CalledProcessError:
-        return ""
-
-
-def query_rev_list(start_ref: str, end_ref: str) -> list[str]:
-    try:
-        return [k.strip() for k in subprocess.check_output(["git", "-C", WORKSPACE, "rev-list", "--reverse", f"{start_ref}..{end_ref}"]).strip().decode("utf-8").split() if k.strip() != ""]
-    except subprocess.CalledProcessError:
-        return []
-
-
 def get_missing_commits(n: int) -> list[str]:
     rev_list = storage.get_rev_list()
     present_commits = set(storage.get_present_commits())
     missing_commits = []
     sequential_missing = 0
     for i in range(len(rev_list)):
-        if rev_list[i] not in present_commits:
+        if rev_list[i] in present_commits:
+            sequential_missing = 0
+        else:
             sequential_missing += 1
         if sequential_missing >= n:
             missing_commits.append(rev_list[i])

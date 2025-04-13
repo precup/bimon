@@ -24,6 +24,11 @@ def get_issue_number(project: str) -> int:
         else:
             print("No issue number found in the project string despite it being a URL.")
             sys.exit(1)
+    elif project.isdigit():
+        return int(project)
+    elif project.startswith("#") and project[1:].isdigit():
+        return int(project[1:])
+    return -1
 
 
 def purge_all(verbose: bool) -> int:
@@ -43,14 +48,7 @@ def purge_all(verbose: bool) -> int:
     return purge_count
 
 
-def prepare_mrp(issue: int) -> str:
-    # gets the MRP zip file from the issue number
-    # it then extracts it to unzip_folder
-    # and returns the path to the extracted folder
-    zip_filename = get_mrp(issue)
-    if not zip_filename:
-        print("No zip file found for this issue.")
-        return ""
+def extract_mrp(zip_filename: str) -> str:
     if os.path.exists(UNZIP_FOLDER):
         shutil.rmtree(UNZIP_FOLDER)
     os.mkdir(UNZIP_FOLDER)
@@ -63,11 +61,15 @@ def prepare_mrp(issue: int) -> str:
 
 
 def find_project_file(folder: str) -> str:
+    if folder.endswith("project.godot"):
+        return folder if os.path.exists(folder) else ""
+    
     project_files = []
     for root, _, files in os.walk(folder):
         for file in files:
             if file == "project.godot":
                 project_files.append(os.path.join(root, file))
+
     if len(project_files) > 1:
         print("Multiple project.godot files found in the extracted folder. Please specify which one to use.")
         for i, file in enumerate(project_files):
@@ -76,7 +78,7 @@ def find_project_file(folder: str) -> str:
         while True:
             if choice.startswith('n'):
                 return ""
-            if all(c.isdigit() for c in choice) and int(choice) < len(project_files):
+            if choice.isdigit() and int(choice) < len(project_files):
                 break
             choice = input("Invalid choice. Please enter a valid number or 'n':")
         return project_files[int(choice)]
@@ -103,7 +105,7 @@ def get_mrp(issue: int) -> str:
             zip_links.append(zip_link['href'])
     zip_links = list(set(zip_links))
     
-    if zip_links.empty():
+    if len(zip_links) == 0:
         return ""
     zip_link = zip_links[0]
     if len(zip_links) > 1:
@@ -114,7 +116,7 @@ def get_mrp(issue: int) -> str:
         while True:
             if choice.startswith('n'):
                 return ""
-            if all(c.isdigit() for c in choice) and int(choice) < len(zip_links):
+            if choice.isdigit() and int(choice) < len(zip_links):
                 break
             choice = input("Invalid choice. Please enter a valid number or 'n':")
         zip_link = zip_links[int(choice)]

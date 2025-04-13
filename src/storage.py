@@ -1,6 +1,7 @@
 import os
 import shutil
 from pathlib import Path
+from typing import Optional
 
 COMPRESS_MAP = "compress_map"
 REV_LIST = "rev_list"
@@ -55,11 +56,11 @@ def get_present_commits() -> list[str]:
 
 
 def extract_commit(commit: str, target: str) -> bool:
-    if os.path.exists(target):
+    tar_output_file = os.path.join(VERSIONS_DIR, commit)
+    if target != tar_output_file and os.path.exists(target):
         print("Extraction failed, target already exists.")
         return False
     
-    tar_output_file = os.path.join(VERSIONS_DIR, commit)
     if os.path.exists(tar_output_file):
         if target != tar_output_file:
             shutil.copyfile(tar_output_file, target)

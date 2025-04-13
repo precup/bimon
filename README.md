@@ -12,18 +12,18 @@ I recommend running the initial compilation stage in two passes. BiMon supports 
 
 This means you could precompile just 1 in N commits and only need to do an average of log2(N) compilations for a bisect. Then, as a second pass, you precompile *every* version walking back from HEAD. Recommended values of N are 128 or 64.
 
-That said, if you're limited on some resource, only running with the first phase works fine.
+That said, if you're limited on some resource, running only 1 in N mode works fine.
 
 ### What's the performance like?
 From 4.0-stable to 4.5-dev1, there are about 20k commits, so I'll be using that number in all my examples.
 
 At first, it seems absurd to compile and store 20k versions of Godot. However, there are a couple things working in our favor:
-- Incremental builds are extremely cheap. Compiling 1 in 8 commits still takes about half the time compiling 1 in 1 commits does, a massive 4x efficiency gain.
+- Incremental builds can save you a lot of time. 
 - Godot binaries have large amounts of overlap and compress well when stored with each other.
 
 When I first started looking into this, my clean builds were taking 10 minutes. The current official Linux build is compressed to about 58 MB by itself. Multiplying those by 20k gives you 140 days and 1.2 TB, which spooked me. 
 
-After optimizing my build, my clean build takes 5 minutes, my incremental builds average 45 seconds, and the binaries compress to an average of 13 MB each. Multiplying those by 20k gives you 10 days and 260 GB, large but not unmanageable numbers.
+After optimizing my build, my clean build takes 2 minutes, my incremental builds average 45 seconds, and the binaries compress to an average of 13 MB each. Multiplying those by 20k gives you 10 days and 260 GB, large but not unmanageable numbers.
 
 My initial 1 in 128 pass from 4.0-stable to 4.5-dev1 took about 6 hours and dropped the average number of compiles from 14 to 7. I chose 128 for N since it was around sqrt(20k).
 
@@ -108,21 +108,20 @@ Once the editor opens, you should attempt to reproduce the bug. Then, either hit
 - add types everywhere
 - better help command
 - better fault tolerance
+- add docs for what must be on the PATH
 - check which arguments are required and which aren't
 
 - better output, colors, support printmode
-- Get venv and python deps handled actually correctly, update setup docs
 - time estimates, heat map, progress bar for compilation
-- Add --force
+- Add no color flag for sad people
 - Add init command
+- Get venv and python deps handled actually correctly, update setup docs
+- Add --force
 - support for git bisect's pathspec parameters
 - better error handling
 - Hotkey testing and support
 - Compiler output cannot be properly Ctrl C'd
-- Add no color flag for sad people
 - add repro command
-- add MRP downloading
-- vararg compile
 
 Bisect
 - warn the user if the most recent commit is pretty old
@@ -132,10 +131,13 @@ Bisect
 - Add retry subcommand
 - Add try subcommand
 - Add help subcommand
-- Add abss subcommands, bisection framework
+- Add bisection framework
 - Add --cached-only
 - Add --discard
 - partially cached bisection support
 - Launching
 - Autoextract nexts
 - add git-rev lookup info in addition to g and b info?
+- resolve refs passed to gbsu
+- handle ctrl c
+- start -v?
