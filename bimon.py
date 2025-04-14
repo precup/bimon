@@ -3,6 +3,7 @@
 import argparse
 import configparser
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -130,7 +131,7 @@ def update(force: bool, n: int, cut_commit: str) -> None:
         cut = missing_commits.index(rev_list[cut])
         missing_commits = missing_commits[cut:] + missing_commits[:cut]
 
-    compile(missing_commits, should_compress=True)
+    compile(missing_commits, should_compress=True, n=n)
 
 
 def bisect_command(discard: bool, cache_only: bool, project: Optional[str], print_mode: PrintMode) -> None:
@@ -148,7 +149,7 @@ def extract_command(rev: str, file_path: Optional[str], print_mode: PrintMode) -
     global _print_mode
     _print_mode = print_mode
     # TODO ignores print mode
-    storage.extract_commit(rev, file_path if file_path else os.path.join(VERSIONS_DIR, rev))
+    storage.extract_commit(rev, file_path if file_path else os.path.join(storage.VERSIONS_DIR, rev))
 
 
 def purge_command(print_mode: PrintMode) -> None:
@@ -181,7 +182,7 @@ def compile_command(revs: list[str], print_mode: PrintMode) -> None:
     compile(commits, should_compress=True)
 
 
-def compile(commits: list[str], should_compress: bool = True) -> None:
+def compile(commits: list[str], should_compress: bool = True, n: int = 1) -> None:
     start_time = time.time()
     times = []
     for i, commit in enumerate(commits):
@@ -218,7 +219,7 @@ def compress(n: int = 1) -> None:
     bundles = compute_bundles(n)
     for i, bundle in enumerate(bundles):
         bundle_id = bundle[0]
-        print(f"Compressing bundle {i + 1} / {len(bundle)}: {int(i / len(bundle) * 100)}%")
+        print(f"Compressing bundle {i + 1} / {len(bundles)}: {int(i / len(bundles) * 100)}%")
         bundled = storage.compress_bundle(bundle_id, bundle)
         if not bundled:
             print(f"Error while compressing bundle {bundle_id}.")
@@ -262,6 +263,7 @@ def compute_bundles(n: int) -> list[list[str]]:
                 not_ready_seen = 0
                 bundle.append(unbundled_versions[bundle_start_i])
                 if len(bundle) >= Configuration.COMPRESS_PACK_SIZE:
+                    bundle_start_i += 1
                     break
             else:
                 not_ready_seen += 1
@@ -298,8 +300,11 @@ def cache(current_commit: str = None) -> None:
     print(f"Caching commit {current_commit}")
     compiled_path = os.path.join(WORKSPACE, "bin", Configuration.BINARY_NAME)
     storage_path = os.path.join("versions", current_commit)
-    os.system(f"mv {compiled_path} {storage_path}")
-    os.system(f"chmod +x {storage_path}")
+    shutil.move(compiled_path, storage_path)
+    try:
+        os.chmod(storage_path, os.stat(storage_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except:
+        pass
 
 
 def single() -> int:

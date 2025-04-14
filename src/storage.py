@@ -2,6 +2,8 @@ import os
 import shutil
 from pathlib import Path
 from typing import Optional
+import tarfile
+import lzma
 
 COMPRESS_MAP = "compress_map"
 REV_LIST = "rev_list"
@@ -71,9 +73,11 @@ def extract_commit(commit: str, target: str) -> bool:
         print(f"Extraction failed, commit {commit} not found in storage.")
         return False
         
-    decompress_result = os.system(f"tar xf {bundle_id}.tar.xz -C {VERSIONS_DIR} {commit}")
-    if decompress_result != 0:
-        print(f"Extraction failed during decompression with exit code {decompress_result}.")
+    try:
+        with tarfile.open(os.path.join(VERSIONS_DIR, f"{bundle_id}.tar.xz"), mode="r:xz") as tar:
+            tar.extract(member=commit, path=VERSIONS_DIR)
+    except tarfile.TarError as e:
+        print(f"Extraction failed during decompression with error {e}.")
         return False
     
     if target != tar_output_file:
@@ -91,22 +95,42 @@ def purge_duplicate_files(protected_commits: set[str]) -> int:
     return purge_count
 
 
+def compress_with_lzma(bundle_path: str, file_paths: list[str]) -> None:
+    # Configure custom LZMA filters to take advantage of large overlaps
+    lzma_filters = [
+        {
+            "id": lzma.FILTER_LZMA2,
+            "dict_size": 512 * 1024 * 1024,  # 512 MB
+            "mode": lzma.MODE_FAST,
+            "mf": lzma.MF_HC4,
+        }
+    ]
+
+    with open(bundle_path, "wb") as f:
+        with lzma.open(f, mode="w", format=lzma.FORMAT_XZ, filters=lzma_filters) as lzma_file:
+            with tarfile.open(fileobj=lzma_file, mode="w") as tar:
+                for file_path in file_paths:
+                    if os.path.exists(file_path):
+                        tar.add(file_path, arcname=os.path.basename(file_path))
+
+
 def compress_bundle(bundle_id: str, bundle: list[str]) -> bool:
     bundle_path = os.path.join(VERSIONS_DIR, f"{bundle_id}.tar.xz")
     if os.path.exists(bundle_path):
         print(f"Bundle {bundle_id} already exists. Skipping.")
         return False
     commit_paths = [os.path.join(VERSIONS_DIR, commit) for commit in bundle]
-    compression_flags = "xz -9 -T 2 --lzma2=dict=512M,mode=fast,mf=hc4 --memory=16G"
-    # TODO PrintMode the output and -v ness
-    compress_result = os.system(f"tar cvf {bundle_path} -I '{compression_flags}' " + " ".join(commit_paths))
-    if compress_result != 0:
-        print(f"Error while compressing bundle {bundle_id}.")
+    try:
+        compress_with_lzma(bundle_path, commit_paths)
+    except Exception as e:
+        print(f"Compressing bundle {bundle_id} failed with error: {e}")
         return False
+
     for commit, commit_path in zip(bundle, commit_paths):
         add_to_compress_map(commit, bundle_id)
         if os.path.exists(commit_path):
             os.remove(commit_path)
+    return True
 
 
 def get_unbundled_files() -> list[str]:

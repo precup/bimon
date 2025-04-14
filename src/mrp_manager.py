@@ -7,7 +7,7 @@ import sys
 
 ISSUES_URL = "github.com/godotengine/godot/issues/"
 MRP_FOLDER = "mrps"
-UNZIP_FOLDER = "mrps/unzip"
+UNZIP_FOLDER = os.path.join("mrps", "unzip")
 
 def get_issue_number(project: str) -> int:
     project = project.strip().lower()

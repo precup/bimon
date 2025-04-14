@@ -3,6 +3,7 @@ import os
 
 CONFIG_PATH = "config.ini"
 DEFAULT_CONFIG_PATH = "default_config.ini"
+DEFAULT_WINDOWS_CONFIG_PATH = "default_windows_config.ini"
 
 class Configuration:
     """
@@ -12,12 +13,13 @@ class Configuration:
     config = configparser.ConfigParser()
 
     config_path = os.path.join(os.path.dirname(__file__), "config.ini")
-    default_config_path = os.path.join(os.path.dirname(__file__), "default_config.ini")
+    platform_default_config_path = DEFAULT_WINDOWS_CONFIG_PATH if os.name == 'nt' else DEFAULT_CONFIG_PATH
+    default_config_path = os.path.join(os.path.dirname(__file__), platform_default_config_path)
     if os.path.exists(CONFIG_PATH):
         config.read(CONFIG_PATH)
-    elif os.path.exists(DEFAULT_CONFIG_PATH):
-        print("config.ini not found. Falling back to default_config.ini.")
-        config.read(DEFAULT_CONFIG_PATH)
+    elif os.path.exists(default_config_path):
+        print(f"config.ini not found. Falling back to {platform_default_config_path}.")
+        config.read(default_config_path)
 
     # General settings
     START_COMMIT = config.get("General", "start_commit")
