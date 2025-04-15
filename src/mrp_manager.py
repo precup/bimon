@@ -31,6 +31,19 @@ def get_issue_number(project: str) -> int:
     return -1
 
 
+def get_issue_creation_date(issue: int) -> str:
+    url = f"https://{ISSUES_URL}{issue}"
+    response = requests.get(url)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    # Find the first link that is a child of a div with a class containing "issue-body"
+    body_divs = soup.find_all('div', class_=re.compile('.*issue-body.*'))
+    for div in body_divs:
+        date_div = div.find('relative-time')
+        if date_div:
+            return date_div['datetime']
+    return ""
+
+
 def purge_all(verbose: bool) -> int:
     purge_count = 0
     if os.path.exists(MRP_FOLDER):
@@ -52,6 +65,7 @@ def extract_mrp(zip_filename: str) -> str:
     if os.path.exists(UNZIP_FOLDER):
         shutil.rmtree(UNZIP_FOLDER)
     os.mkdir(UNZIP_FOLDER)
+    # TODO make this use python's zipfile instead of os.system
     os.system(f"unzip {zip_filename} -d {UNZIP_FOLDER}")
     project_file = find_project_file(UNZIP_FOLDER)
     if not project_file:
@@ -80,7 +94,7 @@ def find_project_file(folder: str) -> str:
                 return ""
             if choice.isdigit() and int(choice) < len(project_files):
                 break
-            choice = input("Invalid choice. Please enter a valid number or 'n':")
+            choice = input("Invalid choice. Please enter a valid number or 'n': ")
         return project_files[int(choice)]
     elif len(project_files) == 1:
         return project_files[0]
@@ -118,7 +132,7 @@ def get_mrp(issue: int) -> str:
                 return ""
             if choice.isdigit() and int(choice) < len(zip_links):
                 break
-            choice = input("Invalid choice. Please enter a valid number or 'n':")
+            choice = input("Invalid choice. Please enter a valid number or 'n': ")
         zip_link = zip_links[int(choice)]
 
     print(f"Downloading zip file from {zip_link}")

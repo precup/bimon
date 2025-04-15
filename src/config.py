@@ -1,39 +1,99 @@
 import configparser
 import os
+import sys
+from enum import Enum
 
 CONFIG_PATH = "config.ini"
 DEFAULT_CONFIG_PATH = "default_config.ini"
 DEFAULT_WINDOWS_CONFIG_PATH = "default_windows_config.ini"
+DEFAULT_MACOS_CONFIG_PATH = "default_macos_config.ini"
+
+
+class PrintMode(Enum):
+    QUIET = 1
+    ERROR_ONLY = 2
+    LIVE = 3
+    VERBOSE = 4
+
 
 class Configuration:
     """
     This class reads and provides access to the configuration settings from config.ini.
-    If config.ini is not present, it falls back to default_config.ini.
+    If config.ini is not present, it falls back to the platform default.
     """
-    config = configparser.ConfigParser()
-
-    config_path = os.path.join(os.path.dirname(__file__), "config.ini")
-    platform_default_config_path = DEFAULT_WINDOWS_CONFIG_PATH if os.name == 'nt' else DEFAULT_CONFIG_PATH
-    default_config_path = os.path.join(os.path.dirname(__file__), platform_default_config_path)
-    if os.path.exists(CONFIG_PATH):
-        config.read(CONFIG_PATH)
-    elif os.path.exists(default_config_path):
-        print(f"config.ini not found. Falling back to {platform_default_config_path}.")
-        config.read(default_config_path)
-
     # General settings
-    START_COMMIT = config.get("General", "start_commit")
-    WORKSPACE_PATH = config.get("General", "workspace_path")
+    START_COMMIT: str
+    WORKSPACE_PATH: str
+    FORCE: bool
 
     # Hotkey settings
-    ENABLE_HOTKEYS = config.getboolean("Hotkeys", "enable_hotkeys")
-    MARK_GOOD_HOTKEY = config.get("Hotkeys", "mark_good")
-    MARK_BAD_HOTKEY = config.get("Hotkeys", "mark_bad")
+    ENABLE_HOTKEYS: bool
+    MARK_GOOD_HOTKEY: str
+    MARK_BAD_HOTKEY: str
 
     # Compression settings
-    COMPRESS_PACK_SIZE = config.getint("Compression", "pack_size")
+    COMPRESS_PACK_SIZE: int
 
     # Compilation settings
-    COMPILER_FLAGS = config.get("Compilation", "compiler_flags")
-    COMPILER_FLAGS += " " + config.get("Compilation", "library_flags")
-    BINARY_NAME = config.get("Compilation", "binary_name")
+    COMPILER_FLAGS: str
+    BINARY_NAME: str
+
+    # Execution settings
+    DEFAULT_EXECUTION_PARAMETERS: str
+
+    # Output settings
+    PRINT_MODE: PrintMode = PrintMode.VERBOSE
+    COLOR_ENABLED: bool
+    MESSAGE_COLOR: str
+    COMMIT_COLOR: str
+    ERROR_COLOR: str
+    WARNING_COLOR: str
+    HEATMAP_COLORS: list[str]
+    
+    def load_from(filepath: str = ""):
+        config = configparser.ConfigParser()
+
+        if filepath == "":
+            default_config_path = DEFAULT_CONFIG_PATH
+            if os.name == 'nt':
+                default_config_path = DEFAULT_WINDOWS_CONFIG_PATH
+            elif sys.platform == 'darwin':
+                default_config_path = DEFAULT_MACOS_CONFIG_PATH
+
+            if os.path.exists(CONFIG_PATH):
+                filepath = CONFIG_PATH
+            elif os.path.exists(default_config_path):
+                print(f"config.ini not found. Falling back to {default_config_path}.")
+                filepath = default_config_path
+            else:
+                print(f"Neither config.ini nor {default_config_path} found and no --config provided. Exiting.")
+                sys.exit(1)
+        config.read(filepath)
+
+        # General settings
+        Configuration.START_COMMIT = config.get("General", "start_commit")
+        Configuration.WORKSPACE_PATH = config.get("General", "workspace_path")
+
+        # Output settings
+        Configuration.COLOR_ENABLED = config.getboolean("Output", "color_enabled")
+        Configuration.MESSAGE_COLOR = config.get("Output", "message_color")
+        Configuration.COMMIT_COLOR = config.get("Output", "commit_color")
+        Configuration.ERROR_COLOR = config.get("Output", "error_color")
+        Configuration.WARNING_COLOR = config.get("Output", "warning_color")
+        Configuration.HEATMAP_COLORS = config.get("Output", "heatmap_colors").split()
+
+        # Hotkey settings
+        Configuration.ENABLE_HOTKEYS = config.getboolean("Hotkeys", "enable_hotkeys")
+        Configuration.MARK_GOOD_HOTKEY = config.get("Hotkeys", "mark_good")
+        Configuration.MARK_BAD_HOTKEY = config.get("Hotkeys", "mark_bad")
+
+        # Compression settings
+        Configuration.COMPRESS_PACK_SIZE = config.getint("Compression", "pack_size")
+
+        # Compilation settings
+        Configuration.COMPILER_FLAGS = config.get("Compilation", "compiler_flags")
+        Configuration.COMPILER_FLAGS += " " + config.get("Compilation", "library_flags")
+        Configuration.BINARY_NAME = config.get("Compilation", "binary_name")
+
+        # Execution settings
+        Configuration.DEFAULT_EXECUTION_PARAMETERS = config.get("Execution", "execution_parameters")

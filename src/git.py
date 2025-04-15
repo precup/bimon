@@ -4,14 +4,47 @@ import subprocess
 from typing import Iterable
 from .config import Configuration
 
-WORKSPACE = Configuration.WORKSPACE_PATH
+def clone(repository, location) -> None:
+    try:
+        os.system(f"git clone {repository} {location}")
+        return True
+    except:
+        return False
+
+
+def check_out(rev: str) -> None:
+    get_git_output(["checkout", rev])
+
+
+def fetch() -> None:
+    get_git_output(["fetch", "--tags", "--prune", "origin"])
 
 
 def get_git_output(args: list[str]) -> str:
     try:
-        return subprocess.check_output(["git", "-C", WORKSPACE] + args).strip().decode("utf-8")
+        return subprocess.check_output(["git", "-C", Configuration.WORKSPACE_PATH] + args).strip().decode("utf-8")
     except subprocess.CalledProcessError:
         return ""
+
+
+def get_commit_time(commit: str) -> int:
+    try:
+        return int(get_git_output(["show", "-s", "--format=%ct", commit]))
+    except:
+        return -1
+
+
+def get_short_name(commit: str, color: bool) -> str:
+    resolved = resolve_ref(commit)
+    if len(resolved) == 0:
+        return terminal.color_bad(commit, color)
+    short_name = get_git_output(["log", f'--pretty=format:"%h"', commit, "-n", "1", "--abbrev-commit"])
+    return terminal.color_ref(short_name, color)
+
+
+def get_short_log(commit: str, color: bool) -> str:
+    commit_msg = get_git_output(["log", f'--pretty=format:"%s"', commit, "-n", "1", "--abbrev-commit"])
+    return get_short_name(commit, color) + " " + commit_msg
 
 
 def resolve_ref(ref: str) -> str:
@@ -23,6 +56,24 @@ def query_rev_list(start_ref: str, end_ref: str) -> list[str]:
     return [k.strip() for k in output.split() if k.strip() != ""]
 
 
-def get_bisect_commits(good_commits: set[str], bad_commits: set[str]) -> list[str]:
-    output = get_git_output(["rev-list", "--bisect-all"] + [f"^{commit}" for commit in good_commits] + list(bad_commits))
-    return [line.strip() for line in output.splitlines() if len(line.strip()) > 0]
+def get_bisect_commits(good_commits: set[str], bad_commits: set[str], path_spec: str) -> list[str]:
+    output = get_git_output(
+        ["rev-list", "--bisect-all"]
+        + [f"^{commit}" for commit in good_commits]
+        + list(bad_commits)
+        + [f"--", path_spec]
+    )
+    return [line.strip().split()[0].strip() for line in output.splitlines() if len(line.strip()) > 0]
+
+
+def get_local_changes() -> bool:
+    return [line.strip() for line in get_git_output(["add", "-An"]).strip().splitlines()]
+
+
+def has_local_changes() -> bool:
+    return len("".join(get_local_changes())) > 0
+
+
+def clear_local_changes() -> None:
+    get_git_output(["reset", "--hard", "HEAD"])
+    get_git_output(["clean", "-df"])

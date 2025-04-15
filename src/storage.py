@@ -43,15 +43,20 @@ def add_to_compress_map(commit: str, location: str) -> None:
     write_compress_map(compress_map)
 
 
-def get_rev_list() -> list[str]:
+def write_rev_list(rev_list: list[str]) -> None:
+    with open(REV_LIST, "w") as f:
+        f.writelines([f"{commit}\n" for commit in rev_list])
+
+
+def read_rev_list() -> list[str]:
     if not os.path.exists(REV_LIST):
         return {}
     with open(REV_LIST, "r") as f:
         return [line.strip() for line in f.readlines() if len(line.strip()) > 0]
 
 
-def get_present_commits() -> list[str]:
-    return (
+def get_present_commits() -> set[str]:
+    return set(
         [version for version in os.listdir(VERSIONS_DIR) if '.' not in version]
         + list(read_compress_map().keys())
     )
@@ -124,6 +129,7 @@ def compress_bundle(bundle_id: str, bundle: list[str]) -> bool:
         compress_with_lzma(bundle_path, commit_paths)
     except Exception as e:
         print(f"Compressing bundle {bundle_id} failed with error: {e}")
+        print(bundle_path, commit_paths)
         return False
 
     for commit, commit_path in zip(bundle, commit_paths):
@@ -134,7 +140,7 @@ def compress_bundle(bundle_id: str, bundle: list[str]) -> bool:
 
 
 def get_unbundled_files() -> list[str]:
-    rev_list = get_rev_list()
+    rev_list = read_rev_list()
     compress_map = read_compress_map()
     return [
         path for path in os.listdir(VERSIONS_DIR) 

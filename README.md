@@ -37,6 +37,7 @@ If you've got a fancy `git bisect run` based workflow, you can have it retrieve 
 - Time. Compiling all the commits you want up front will take a long time. If you want to compile 20k commits, take your clean build time in minutes and multiply it by 2. It'll take roughly that many *days* to finish. 
 - Space. It'll take about 13 GB per 1k commits in the range you want to cover. 4.0 to 4.4 is about 260 GB.
 - This was made for Linux. If you want it on other platforms, PRs are welcome.
+- A reasonably recent version of git on your PATH
 
 ### Setup
 1) Check out a new copy of the `godotengine/godot` repo in a location outside the BiMon folder since they have separate git setups. This will be called your workspace folder. Using a dedicated clone of godot instead of reusing the one you do dev work on is strongly recommended.
@@ -98,46 +99,51 @@ The intended workflow to bisect an issue is to get an MRP, run `bimon.py bisect 
 Once the editor opens, you should attempt to reproduce the bug. Then, either hit the MARK_GOOD or MARK_BAD hotkeys or switch back to your terminal and submit `g` or `b`. Repeat with each new editor that opens. 
 
 ### TODO
-- Double check the times and sizes in this document
-- Write a good Optimizing Builds section
-- other OS support?
-- repo cleanup and creation
+- update README.md
+- repo cleanup
 - update help message
-- clean build time references might be lies, double check that stuff
 - clean up code
 - add types everywhere
 - better help command
 - better fault tolerance
-- add docs for what must be on the PATH
 - check which arguments are required and which aren't
+- should force be the default?
+- check sys.exit codes
+- weird behavior for extremely small commit range (1 commit, etc)
 
-- better output, colors, support printmode
-- time estimates, heat map, progress bar for compilation
-- Add no color flag for sad people
-- Add init command
-- Get venv and python deps handled actually correctly, update setup docs
-- Add --force
-- support for git bisect's pathspec parameters
-- better error handling
-- Hotkey testing and support
-- Compiler output cannot be properly Ctrl C'd
-- add repro command
+Design questions
+  Should repro start from the issue timestamp or the latest?
+  Should force be default?
+  What should the bisect exit message contain?
+  What commands should bisect support to let you examine the remaining commits?
+  How should I handle failed bundling? How should I handle failed compiles?
 
 Bisect
-- warn the user if the most recent commit is pretty old
-- handle going beyond the start and end commits
+- use an empty project if none exists
+- start at start date of issue?
+- path-spec should probably be vararg or split
+- Exit message
+- add git-rev lookup info in addition to exit g and b info?
 - Add visualize subcommand
 - Add list subcommand
-- Add retry subcommand
-- Add try subcommand
-- Add help subcommand
-- Add bisection framework
-- Add --cached-only
-- Add --discard
-- partially cached bisection support
-- Launching
 - Autoextract nexts
-- add git-rev lookup info in addition to g and b info?
-- resolve refs passed to gbsu
-- handle ctrl c
-- start -v?
+- Test bisect
+Commands
+- add repro command
+- Add init command
+- Get venv and python deps handled actually correctly, update setup docs
+Misc
+- mrps outside the issue body
+- macos support
+- bundles that fail to compress should be removed
+- compression still fails sometimes
+Input/Output
+- Hotkey testing and support
+- Add help subcommand
+- bisect history support?
+- handle bisect ctrl c
+- Better output, colors, support printmode, text decorations?
+- Time estimates, heat map, progress bar for compilation
+- Compiler output cannot be properly Ctrl C'd
+- Compiler output can occur during bisects
+- use git.get_short_name in outputs

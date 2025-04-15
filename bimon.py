@@ -8,23 +8,14 @@ import subprocess
 import sys
 import time
 
-from enum import Enum
 from typing import Optional
 
 import src.signal_handler as signal_handler
 import src.storage as storage
 import src.git as git
+import src.factory as factory
 
-from src.config import Configuration
-
-class PrintMode(Enum):
-    QUIET = 1
-    LIVE = 2
-    VERBOSE = 3
-
-_print_mode = PrintMode.LIVE
-
-WORKSPACE = Configuration.WORKSPACE_PATH
+from src.config import Configuration, PrintMode
 
 ############################################################
 #                      Initialization                      #
@@ -35,14 +26,6 @@ def main() -> None:
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
     storage.init_storage()
     signal_handler.install()
-    if not os.path.exists(WORKSPACE):
-        print(f"BiMon requires a Godot workspace at path '{WORKSPACE}'.")
-        clone_response = input(f"Clone one there now? (y/n): ").strip().lower()
-        if clone_response.startswith('y'):
-            os.system(f"git clone https://github.com/godotengine/godot.git {WORKSPACE}")
-        else:
-            print("BiMon requires a Godot workspace to function. Exiting.")
-            sys.exit(1)
 
     if len(sys.argv) < 2:
         print_short_help()
@@ -51,52 +34,79 @@ def main() -> None:
     process_command_and_arguments()
 
 
+def global_args(args):
+    Configuration.load_from(args.config if args.config else "")
+    Configuration.FORCE = args.force
+    if args.color is None:
+        args.color = sys.stdout.isatty() and os.getenv("TERM") != "dumb"
+    Configuration.COLOR = args.color
+    if args.print_mode is not None:
+        Configuration.PRINT_MODE = args.print_mode
+
+
 def process_command_and_arguments() -> None:
     parser = argparse.ArgumentParser(description="BiMon: A tool for speeding up bisecting during bug triage for the Godot engine bugsquad.")
     parser.add_argument("-q", "--quiet", action="store_const", const=PrintMode.QUIET, dest="print_mode", help="Quiet mode hides output from long-running subprocesses.")
     parser.add_argument("-v", "--verbose", action="store_const", const=PrintMode.VERBOSE, dest="print_mode", help="Verbose mode prints output from subprocesses.")
     parser.add_argument("-l", "--live", action="store_const", const=PrintMode.LIVE, dest="print_mode", help="Live mode shows a live updating display of subprocess output.")
+    parser.add_argument("-f", "--force", action="store_true", help="Discard uncommitted changes in the workspace directory if they're in the way.")
+    parser.add_argument("--color", nargs="?", const=True, default=None, type=lambda x: x.lower() in ("true", "1", "yes", ""), help="Enable or disable colored output (default: auto-detect).")
+    parser.add_argument("--config", type=str, help="Path to the configuration file. Defaults to config.ini, falls back to default_{platform}_config.ini.")
     parser.set_defaults(print_mode=PrintMode.LIVE if sys.stdout.isatty() else PrintMode.VERBOSE)
 
     subparsers = parser.add_subparsers(dest="command", required=True, help="Available commands")
 
     # Porcelain commands
     update_parser = subparsers.add_parser("update", help="Fetch, compile, and cache missing commits.")
-    update_parser.add_argument("-f", "--force", action="store_true", help="Discard uncommitted changes in the workspace directory.")
     update_parser.add_argument("-n", type=int, help="Only compile and cache 1 in every N commits.")
     update_parser.add_argument("cut_rev", nargs="?", help="The revision to start working back from.")
-    update_parser.set_defaults(func=lambda args: update_command(args.force, args.n, args.cut_rev, args.print_mode))
+    update_parser.set_defaults(func=lambda args: update_command(args.force, args.n, args.cut_rev))
 
     bisect_parser = subparsers.add_parser("bisect", help="Bisect history to find a regression's commit via an interactive mode.")
     bisect_parser.add_argument("-d", "--discard", action="store_true", help="Prevent caching binaries compiled during a bisect.")
     bisect_parser.add_argument("-c", "--cached-only", action="store_true", help="Prevent compiling at all during a bisect.")
+    bisect_parser.add_argument("--ignore-date", action="store_true", help="Don't use the issue open date to cut down the commit range.")
+    bisect_parser.add_argument("--path-spec", type=str, default=None, help="Limit the bisect to commits with specific files. See git bisect's path_spec behavior for full details.")
     bisect_parser.add_argument("project", nargs="?", help="Path to the project or project.godot file.")
-    bisect_parser.set_defaults(func=lambda args: bisect_command(args.discard, args.cache_only, args.project, args.print_mode))
+    bisect_parser.set_defaults(func=lambda args: bisect_command(args.discard, args.cache_only, args.ignore_date, args.path_spec, args.project))
 
     extract_parser = subparsers.add_parser("extract", help="Extract the binary for a specific revision.")
     extract_parser.add_argument("rev", help="The revision name to extract.")
-    extract_parser.add_argument("file_path", nargs="?", help="The file path to extract the binary to.")
-    extract_parser.set_defaults(func=lambda args: extract_command(args.rev, args.file_path, args.print_mode))
+    extract_parser.add_argument("file_path", help="The file path to extract the binary to.")
+    extract_parser.set_defaults(func=lambda args: extract_command(args.rev, args.file_path))
 
     purge_parser = subparsers.add_parser("purge", help="Delete uncompressed binaries that are also present in compressed form.")
-    purge_parser.set_defaults(func=lambda args: purge_command(args.print_mode))
+    purge_parser.set_defaults(func=lambda args: purge_command())
 
     help_parser = subparsers.add_parser("help", help="Show help information.")
     help_parser.set_defaults(func=lambda args: help_command())
 
     # Plumbing commands
     fetch_parser = subparsers.add_parser("fetch", help="Fetch the latest commits and update the processing lists.")
-    fetch_parser.set_defaults(func=lambda args: fetch_command(args.print_mode))
+    fetch_parser.set_defaults(func=lambda args: fetch_command())
 
     compile_parser = subparsers.add_parser("compile", help="Compile and store specific revisions.")
     compile_parser.add_argument("revs", nargs="*", default="HEAD", help="The revisions to compile. Defaults to the workspace HEAD if none are provided.")
-    compile_parser.set_defaults(func=lambda args: compile_command(args.revs, args.print_mode))
+    compile_parser.set_defaults(func=lambda args: compile_command(args.revs, args.force))
 
     compress_parser = subparsers.add_parser("compress", help="Pack completed bundles.")
-    compress_parser.add_argument("-n", type=int, help="Allow gaps of size N - 1 while bundling.")
-    compress_parser.set_defaults(func=lambda args: compress_command(args.print_mode, args.n))
+    compress_parser.add_argument("-n", type=int, help="Allow gaps of size N - 1 while bundling. Useful for 1 in N updates.")
+    compress_parser.add_argument("-a", "--all", action="store_true", help="Bundle and compress all loose files, regardless of whether they're optimally similar.")
+    compress_parser.set_defaults(func=lambda args: compress_command(args.n, args.all))
 
     args = parser.parse_args()
+    global_args(args)
+
+    workspace = Configuration.WORKSPACE_PATH
+    if not os.path.exists(workspace):
+        print(f"BiMon requires a Godot workspace at path '{workspace}'.")
+        clone_response = input(f"Clone one there now? (y/n): ").strip().lower()
+        if clone_response.startswith('y'):
+            git.clone("https://github.com/godotengine/godot.git", workspace)
+        else:
+            print("BiMon requires a Godot workspace to function. Exiting.")
+            sys.exit(1)
+
     args.func(args)
 
 
@@ -105,15 +115,13 @@ def process_command_and_arguments() -> None:
 ############################################################
 
 
-def update_command(force: bool, n: Optional[int], cut_rev: Optional[str], print_mode: PrintMode) -> None:
-    global _print_mode
-    _print_mode = print_mode
+def update_command(force: bool, n: Optional[int], cut_rev: Optional[str]) -> None:
     update(force, n if n is not None else 1, cut_rev)
 
 
 def update(force: bool, n: int, cut_commit: str) -> None:
     fetch(n)
-    rev_list = storage.get_rev_list()
+    rev_list = storage.read_rev_list()
     missing_commits = list(get_missing_commits(n)[::-1])
     if cut_commit is not None:
         cut_commit = git.resolve_ref(cut_commit.strip())
@@ -131,101 +139,47 @@ def update(force: bool, n: int, cut_commit: str) -> None:
         cut = missing_commits.index(rev_list[cut])
         missing_commits = missing_commits[cut:] + missing_commits[:cut]
 
-    compile(missing_commits, should_compress=True, n=n)
+    factory.compile(missing_commits, should_compress=True, n=n, force=force)
 
 
-def bisect_command(discard: bool, cache_only: bool, project: Optional[str], print_mode: PrintMode) -> None:
-    global _print_mode
-    _print_mode = print_mode
-    # TODO ignores print mode
-    bisect(project)
+def bisect_command(discard: bool, cache_only: bool, ignore_date: bool, path_spec: Optional[str], project: Optional[str]) -> None:
+    bisect(discard, cache_only, ignore_date, project, Configuration.DEFAULT_EXECUTION_PARAMETERS, path_spec)
 
 
-def bisect(project) -> None:
-    pass
+def extract_command(rev: str, file_path: str) -> None:
+    storage.extract_commit(rev, file_path)
 
 
-def extract_command(rev: str, file_path: Optional[str], print_mode: PrintMode) -> None:
-    global _print_mode
-    _print_mode = print_mode
-    # TODO ignores print mode
-    storage.extract_commit(rev, file_path if file_path else os.path.join(storage.VERSIONS_DIR, rev))
-
-
-def purge_command(print_mode: PrintMode) -> None:
-    global _print_mode
-    _print_mode = print_mode
+def purge_command() -> None:
     purge_count = storage.purge_duplicate_files({git.resolve_ref(Configuration.START_COMMIT)})
+    if os.path.exists(bisect.TMP_DIR):
+        purge_count += len(os.listdir(bisect.TMP_DIR))
+        shutil.rmtree(bisect.TMP_DIR)
     print(f"Purged {purge_count} files.")
 
 
-def fetch_command(print_mode: PrintMode) -> None:
-    global _print_mode
-    _print_mode = print_mode
+def fetch_command() -> None:
     fetch()
 
 
 def fetch(n: int = 1) -> None:
     print("Fetching...")
-    os.system(f"git -C {WORKSPACE} fetch origin")
-    os.system(f"git -C {WORKSPACE} rev-list --reverse {Configuration.START_COMMIT}..origin/master > {storage.REV_LIST}")
+    git.fetch()
+    rev_list = git.query_rev_list(Configuration.START_COMMIT, "origin/master")
+    storage.write_rev_list(rev_list)
 
     print(f"{len(get_missing_commits(n))} commits are waiting to be compiled.")
 
 
-def compile_command(revs: list[str], print_mode: PrintMode) -> None:
-    global _print_mode
-    _print_mode = print_mode
+def compile_command(revs: list[str], force: Optional[bool]) -> None:
     if len(revs) == 0:
         revs.append("HEAD")
     commits = [git.resolve_ref(rev) for rev in revs]
-    compile(commits, should_compress=True)
+    factory.compile(commits, should_compress=True, force=force if force is not None else False)
 
 
-def compile(commits: list[str], should_compress: bool = True, n: int = 1) -> None:
-    start_time = time.time()
-    times = []
-    for i, commit in enumerate(commits):
-        print(f"({i + 1} / {len(commits)}: {int(i / len(commits) * 100)}%) Compiling commit {commit}")
-        print("Times:", times)
-        os.system(f"(cd {WORKSPACE} && git checkout {commit})")
-        error_code = single()
-        if error_code != 0:
-            print(f"Error while compiling commit {commit}. Skipping.")
-            time.sleep(0.1)
-            start_time = time.time()
-            continue
-        cache(commit)
-        times.append((commit, time.time() - start_time))
-
-        if i % (Configuration.COMPRESS_PACK_SIZE * 2) == 0 and i > 0 and not signal_handler.SHOULD_EXIT and should_compress:
-            compress()
-
-        start_time = time.time()
-        if signal_handler.SHOULD_EXIT:
-            break
-
-    if not signal_handler.SHOULD_EXIT and should_compress:
-        compress()
-
-
-def compress_command(print_mode: PrintMode, n: Optional[int]) -> None:
-    global _print_mode
-    _print_mode = print_mode
-    compress(n if n is not None else 1)
-
-
-def compress(n: int = 1) -> None:
-    bundles = compute_bundles(n)
-    for i, bundle in enumerate(bundles):
-        bundle_id = bundle[0]
-        print(f"Compressing bundle {i + 1} / {len(bundles)}: {int(i / len(bundles) * 100)}%")
-        bundled = storage.compress_bundle(bundle_id, bundle)
-        if not bundled:
-            print(f"Error while compressing bundle {bundle_id}.")
-            sys.exit(1)
-        if signal_handler.SHOULD_EXIT:
-            break
+def compress_command(n: Optional[int], force: Optional[bool]) -> None:
+    factory.compress(n if n is not None else 1, force if force is not None else False)
 
 
 def help_command() -> None:
@@ -243,43 +197,8 @@ def print_short_help() -> None:
 ###########################################################
 
 
-def compute_bundles(n: int) -> list[list[str]]:
-    rev_list = storage.get_rev_list()
-    compress_map = storage.read_compress_map()
-    unbundled_versions = [rev for rev in rev_list if rev not in compress_map]
-    ready_to_bundle = storage.get_unbundled_files()
-    bundle_start_i = 0
-    bundles = []
-    while bundle_start_i < len(unbundled_versions):
-        if unbundled_versions[bundle_start_i] not in ready_to_bundle:
-            bundle_start_i += 1
-            continue
-        bundle = [unbundled_versions[bundle_start_i]]
-        not_ready_seen = 0
-        bundle_start_i += 1
-        bad_bundle = False
-        while bundle_start_i < len(unbundled_versions):
-            if unbundled_versions[bundle_start_i] in ready_to_bundle:
-                not_ready_seen = 0
-                bundle.append(unbundled_versions[bundle_start_i])
-                if len(bundle) >= Configuration.COMPRESS_PACK_SIZE:
-                    bundle_start_i += 1
-                    break
-            else:
-                not_ready_seen += 1
-                if not_ready_seen >= n:
-                    bad_bundle = True
-                    break
-            bundle_start_i += 1
-        
-        if not bad_bundle:
-            bundles.append(bundle)
-
-    return bundles
-
-
 def get_missing_commits(n: int) -> list[str]:
-    rev_list = storage.get_rev_list()
+    rev_list = storage.read_rev_list()
     present_commits = set(storage.get_present_commits())
     missing_commits = []
     sequential_missing = 0
@@ -292,23 +211,6 @@ def get_missing_commits(n: int) -> list[str]:
             missing_commits.append(rev_list[i])
             sequential_missing = 0
     return missing_commits
-
-
-def cache(current_commit: str = None) -> None:
-    if current_commit is None:
-        current_commit = os.popen(f"git -C {WORKSPACE} rev-parse HEAD").read().strip()
-    print(f"Caching commit {current_commit}")
-    compiled_path = os.path.join(WORKSPACE, "bin", Configuration.BINARY_NAME)
-    storage_path = os.path.join("versions", current_commit)
-    shutil.move(compiled_path, storage_path)
-    try:
-        os.chmod(storage_path, os.stat(storage_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    except:
-        pass
-
-
-def single() -> int:
-    return os.system(f"(cd {WORKSPACE} && scons {Configuration.COMPILER_FLAGS})")
 
 
 ###########################################################
