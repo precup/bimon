@@ -193,7 +193,7 @@ def compile(commits: list[str], should_compress: bool = True, n: int = 1, retry_
     _handle_local_changes(True)
 
     present_commits = storage.get_present_commits()
-    rev_list = storage.read_rev_list()
+    rev_list = git.query_rev_list(Configuration.START_COMMIT, Configuration.TRACKED_BRANCH)
     tags = git.get_tags()
 
     start_time = time.time()
@@ -212,7 +212,7 @@ def compile(commits: list[str], should_compress: bool = True, n: int = 1, retry_
                 print(f"Error while compiling commit {commit}.")
                 print("Adding to the compile_error_commit file so it's skipped in the future.")
                 print("If you fix its build, you should remove it from the file or run with --ignore-old-errors.")
-                mark_error(commit)
+                storage.add_compiler_error_commits([commit])
             print(f"Error while compiling commit {commit}. Skipping.")
             error_commits.add(commit)
             start_time = time.time()
@@ -225,7 +225,8 @@ def compile(commits: list[str], should_compress: bool = True, n: int = 1, retry_
             print("The following commits will be skipped in the future:")
             for commit in error_commits:
                 print("\t" + commit)
-                mark_error(commit)
+            
+            storage.add_compiler_error_commits(error_commits)
             print("If you fix their builds, you should remove them from compile_error_commit or run with --ignore-old-errors.")
                 
         times[commit] = time.time() - start_time
@@ -245,15 +246,15 @@ def compile(commits: list[str], should_compress: bool = True, n: int = 1, retry_
     return signal_handler.SHOULD_EXIT or not should_compress or compress(n, retry_compress)
 
 
-def mark_error(commit: str) -> None:
-    pass
-
-
 def compute_bundles(n: int, all: bool = False) -> list[list[str]]:
-    rev_list = storage.read_rev_list()
+    rev_list = git.query_rev_list(Configuration.START_COMMIT, Configuration.TRACKED_BRANCH)
     compress_map = storage.read_compress_map()
     unbundled_versions = [rev for rev in rev_list if rev not in compress_map]
     ready_to_bundle = storage.get_unbundled_files()
+    if all:
+        for unbundled in ready_to_bundle:
+            if unbundled not in unbundled_versions:
+                unbundled_versions.append(unbundled)
     bundle_start_i = 0
     bundles = []
     while bundle_start_i < len(unbundled_versions):

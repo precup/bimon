@@ -1,7 +1,6 @@
-
-import os
+import functools
 import subprocess
-from typing import Iterable
+import shlex
 from src.config import Configuration
 import src.terminal as terminal
 
@@ -31,6 +30,7 @@ def get_git_output(args: list[str]) -> str:
         return ""
 
 
+@functools.lru_cache(maxsize=2048)
 def get_commit_time(commit: str) -> int:
     try:
         return int(get_git_output(["show", "-s", "--format=%ct", commit]))
@@ -38,6 +38,7 @@ def get_commit_time(commit: str) -> int:
         return -1
 
 
+# TODO caching
 def get_commit_times(commits: list[str]) -> dict[str, int]:
     if len(commits) == 0:
         return {}
@@ -48,6 +49,7 @@ def get_commit_times(commits: list[str]) -> dict[str, int]:
         return {}
 
 
+@functools.lru_cache
 def get_short_name(commit: str) -> str:
     resolved = resolve_ref(commit)
     if len(resolved) == 0:
@@ -56,6 +58,7 @@ def get_short_name(commit: str) -> str:
     return terminal.color_rev(short_name)
 
 
+@functools.lru_cache
 def get_plain_short_name(commit: str) -> str:
     resolved = resolve_ref(commit)
     if len(resolved) == 0:
@@ -63,21 +66,24 @@ def get_plain_short_name(commit: str) -> str:
     return get_git_output(["log", f'--pretty=format:"%h"', commit, "-n", "1", "--abbrev-commit"])
 
 
+@functools.lru_cache
 def get_short_log(commit: str) -> str:
     commit_msg = get_git_output(["log", f'--pretty=format:"%s"', commit, "-n", "1", "--abbrev-commit"])
     return get_short_name(commit) + " " + commit_msg
 
 
+@functools.lru_cache(maxsize=None)
 def resolve_ref(ref: str) -> str:
     return get_git_output(["rev-parse", ref])
 
 
+@functools.lru_cache
 def query_rev_list(start_ref: str, end_ref: str, path_spec: str = "", before: int = -1) -> list[str]:
     command = ["rev-list", "--reverse", f"{start_ref}..{end_ref}"]
     if before >= 0:
         command += [f"--before={before}"]
     if path_spec.strip() != "":
-        command += [f"--", path_spec]
+        command += [f"--", shlex.split(path_spec)]
     output = get_git_output(command)
     return [k.strip() for k in output.split() if k.strip() != ""]
 
@@ -87,7 +93,7 @@ def get_bisect_commits(good_commits: set[str], bad_commits: set[str], path_spec:
     if before >= 0:
         command += [f"--before={before}"]
     if path_spec.strip() != "":
-        command += [f"--", path_spec]
+        command += [f"--", shlex.split(path_spec)]
     output = get_git_output(command)
     return [line.strip().split()[0].strip() for line in output.splitlines() if len(line.strip()) > 0]
 
@@ -107,3 +113,7 @@ def clear_local_changes() -> None:
 
 def get_tags() -> list[str]:
     return [line.strip() for line in get_git_output(["tag", "-l"]).splitlines()]
+
+
+def is_ancestor(possible_ancestor: str, commit: str) -> bool:
+    return len(query_rev_list(possible_ancestor, commit)) > 0

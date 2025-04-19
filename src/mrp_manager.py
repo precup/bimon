@@ -28,7 +28,7 @@ def get_issue_number(project: str) -> int:
         if number:
             return int(number)
         else:
-            print("No issue number found in the project string despite it being a URL.")
+            print("Unrecoverable internal error: No issue number found in argument despite it being an issue URL.")
             sys.exit(1)
     elif project.isdigit():
         return int(project)
@@ -152,12 +152,11 @@ def create_mrp(issue_number: int = -1) -> str:
     
 def get_mrp(issue: int) -> str:
     if issue == -1:
-        print("No project or issue was provided.")
+        print("Execution parameters request a {PROJECT} but no project or issue was provided.")
         response = input("Would you like to use a temporary sandbox project? (y/n): ")
         if response.lower().startswith("y"):
             return mrp_manager.create_mrp()
         else:
-            print("Nothing to do.")
             return ""
     folder_name = os.path.join(MRP_FOLDER, f"{issue}")
     zip_filename = os.path.join(MRP_FOLDER, f"{issue}.zip")
@@ -208,6 +207,5 @@ def get_mrp(issue: int) -> str:
         print(f"No MRP found in issue #{issue_number}.")
         response = input("Would you like to create a blank project to use? (y/n): ")
         if not response.lower().startswith("y") and not response.lower().startswith("c"):
-            print("Nothing to do. Exiting.")
-            sys.exit(1)
+            return ""
     return mrp_manager.create_mrp(issue_number)

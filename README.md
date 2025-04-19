@@ -99,49 +99,75 @@ The intended workflow to bisect an issue is to get an MRP, run `bimon.py bisect 
 Once the editor opens, you should attempt to reproduce the bug. Then, either hit the MARK_GOOD or MARK_BAD hotkeys or switch back to your terminal and submit `g` or `b`. Repeat with each new editor that opens. 
 
 ### TODO
-- update README.md
-- repo cleanup
-- update help message
-- clean up code
-- add types everywhere
-- better help command
-- better fault tolerance
-- check which arguments are required and which aren't
-- check sys.exit codes
-- weird behavior for extremely small commit range (1 commit, etc)
-- testing
-    non LLVM build outputs
-- Add help subcommand
-- window resizing support?
-- find mentioned commits?
-- fullscreen mode?
-- caching?
-- Ctrl C in the middle of print can cause issues
 
-24 Functional
-  - 2 path spec should allow you to test commits outside that set if that's the only precompiled
-  - 2 allow cut revs that aren't in START_COMMIT..TRACKED_BRANCH
+bisect:340 no more commits to test (expand range?)
 
+src/bisect.py:185:            sys.exit(1)
+src/bisect.py:222:        sys.exit(1)
+src/bisect.py:250:                sys.exit(0)
+src/bisect.py:253:            sys.exit(0)
+src/bisect.py:536:            sys.exit(0)
+src/mrp_manager.py:32:            sys.exit(1)
+src/mrp_manager.py:212:            sys.exit(1)
+bisect needs to handle its own error codes
+
+32 Functional
+  17 Major
   - 3 Hotkeys
 
-  - 2 macos support
-  - 4 redo windows support, mostly tty stuff
+  - 2 MacOS support
+        Support storing folders instead of binaries
+        Support running nested file
+  - 4 Add Windows execute_in_subwindow support
 
   - 4 Optimize decompression times, redo bundles to match
-  - 2 Autoextract nexts
+  - 4 Autoextract next possible commits in threads while bisecting
+        get_next_commits needs updating
+        
+  - 2 path spec should allow you to test commits outside that set if that's the only precompiled
+  15 Minor
+  - 1 audit behavior for extremely small commit ranges (1 commit, etc)
+  - 2 use the commit range arguments everywhere
+        add initial range argument to bisect
+  - 1 add a percentage display to the full histogram
+  - 1 warn repro (maybe others) about ignored or error commits
+  - 1 defend against size 0 ranges
+  - 2 ValueError: too many values to unpack (expected 2) still exists
+  - 1 Add anything else useful to the init command
+        validate config
+        commit range should be extant
+  - 1 Finalize requirements.txt
+  - 1 get_commit_times caching
+  - 1 bisect error codes
+  - 1 bisect:320 no more commits to test (expand range?)
 
-  - 4 deal with compiler errors
-      In mark_error, add it to compile_error_commits. 
-      Never attempt to compile compile_error_commits unless specifically requested or IGNORE_OLD_ERRORS
-      Add separate ignore_commits file
+8 Finishing touches
+- 2 Support command completion
+- 2 Better output, colors, text decorations?
+- 2 handle non live printmodes
+- 1 progress bar feels a bit cluttered
+- 1 boolean arguments shouldn't require the positionals, really awkward
 
-10 Interface
-  1 Arguments
-  - 1 path-spec should probably be vararg or split
-  9 Finishing touches
-  - 1 Add init command
-  - 1 Get venv and python deps handled actually correctly
-  - 2 Support command completion
-  - 2 Better output, colors, text decorations?
-  - 2 handle non live printmodes
-  - 1 progress bar feels a bit cluttered
+Clean up
+- Code clean up pass
+- Repo organization pass
+- Use types consistently
+- Run a linter
+
+Testing
+- General
+- Check which arguments are required and which aren't
+- Non LLVM build outputs
+- Windows
+
+Documentation
+- Write README.md
+- Write main help command
+- Update argparser help strings
+- Write help subcommand
+
+Someday?
+- Terminal window resizing support
+- Find commits mentioned in the issue
+- Fullscreen update mode
+- SIGINT doesn't print if triggered in the middle of another print

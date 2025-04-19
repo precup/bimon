@@ -1,12 +1,8 @@
 #!/usr/bin/env python
 
 import argparse
-import configparser
 import os
-import shutil
-import subprocess
 import sys
-import time
 
 from typing import Optional
 
@@ -28,12 +24,7 @@ def main() -> None:
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
     storage.init_storage()
     terminal.init_terminal()
-    signal_handler.install()
-
-    if len(sys.argv) < 2:
-        print_short_help()
-        sys.exit(1)
-    
+    signal_handler.install()   
     process_command_and_arguments()
 
 
@@ -65,14 +56,15 @@ def process_command_and_arguments() -> None:
 
     subparsers = parser.add_subparsers(dest="command", required=True, help="Available commands")
 
+    # Porcelain commands
     init_parser = subparsers.add_parser("init", help="Initializes the workspace and sets up python deps.")
     init_parser.set_defaults(func=lambda args: init_command())
 
-    # Porcelain commands
     update_parser = subparsers.add_parser("update", help="Fetch, compile, and cache missing commits.")
     update_parser.add_argument("-n", type=int, help="Only compile and cache 1 in every N commits.")
-    update_parser.add_argument("cut_rev", nargs="?", help="The revision to start working back from.")
-    update_parser.set_defaults(func=lambda args: update_command(args.n, args.cut_rev))
+    update_parser.add_argument("-r", "--range", type=str, help="The commit range to compile, format 'start..end'. Defaults to the values in config.")
+    update_parser.add_argument("cursor_rev", nargs="?", help="The revision to start working back from.")
+    update_parser.set_defaults(func=lambda args: update_command(args.n, args.cursor_rev, args.range))
 
     repro_parser = subparsers.add_parser("repro", help="Reproduce an issue using the specified parameters.")
     repro_parser.add_argument("-d", "--discard", nargs="?", const=True, default=None, type=lambda x: x.lower() in ("true", "1", "yes", ""), help="Prevent caching binaries compiled during a bisect.")
@@ -95,23 +87,15 @@ def process_command_and_arguments() -> None:
     bisect_parser.set_defaults(func=
         lambda args: bisect_command(args.execution_parameters, args.discard, args.cached_only, args.ignore_date, args.path_spec, args.project, args.issue, args.project_or_issue))
 
-    extract_parser = subparsers.add_parser("extract", help="Extract the binary for a specific revision.")
-    extract_parser.add_argument("rev", help="The revision name to extract.")
-    extract_parser.add_argument("file_path", help="The file path to extract the binary to.")
-    extract_parser.set_defaults(func=lambda args: extract_command(args.rev, args.file_path))
-
     purge_parser = subparsers.add_parser("purge", help="Delete uncompressed binaries that are also present in compressed form.")
-    compress_parser.add_argument("-m", "--mrps", nargs="?", const=True, default=True, type=lambda x: x.lower() in ("true", "1", "yes", ""), help="Bundle and compress all loose files, regardless of whether they're optimally similar.")
-    compress_parser.add_argument("-d", "--duplicates", nargs="?", const=True, default=True, type=lambda x: x.lower() in ("true", "1", "yes", ""), help="Bundle and compress all loose files, regardless of whether they're optimally similar.")
+    purge_parser.add_argument("-m", "--mrps", nargs="?", const=True, default=True, type=lambda x: x.lower() in ("true", "1", "yes", ""), help="Bundle and compress all loose files, regardless of whether they're optimally similar.")
+    purge_parser.add_argument("-d", "--duplicates", nargs="?", const=True, default=True, type=lambda x: x.lower() in ("true", "1", "yes", ""), help="Bundle and compress all loose files, regardless of whether they're optimally similar.")
     purge_parser.set_defaults(func=lambda args: purge_command(args.mrps, args.duplicates))
 
     help_parser = subparsers.add_parser("help", help="Show help information.")
     help_parser.set_defaults(func=lambda args: help_command())
 
     # Plumbing commands
-    fetch_parser = subparsers.add_parser("fetch", help="Fetch the latest commits and update the processing lists.")
-    fetch_parser.set_defaults(func=lambda args: fetch_command())
-
     compile_parser = subparsers.add_parser("compile", help="Compile and store specific revisions.")
     compile_parser.add_argument("revs", nargs="*", default="HEAD", help="The revisions to compile. Defaults to the workspace HEAD if none are provided.")
     compile_parser.set_defaults(func=lambda args: compile_command(args.revs))
@@ -120,6 +104,11 @@ def process_command_and_arguments() -> None:
     compress_parser.add_argument("-n", type=int, help="Allow gaps of size N - 1 while bundling. Useful for 1 in N updates.")
     compress_parser.add_argument("-a", "--all", nargs="?", const=True, default=None, type=lambda x: x.lower() in ("true", "1", "yes", ""), help="Bundle and compress all loose files, regardless of whether they're optimally similar.")
     compress_parser.set_defaults(func=lambda args: compress_command(args.n, args.all))
+
+    extract_parser = subparsers.add_parser("extract", help="Extract the binary for a specific revision.")
+    extract_parser.add_argument("rev", help="The revision name to extract.")
+    extract_parser.add_argument("file_path", help="The file path to extract the binary to.")
+    extract_parser.set_defaults(func=lambda args: extract_command(args.rev, args.file_path))
 
     args = parser.parse_args()
     global_args(args)
@@ -146,30 +135,60 @@ def init_command() -> None:
     print("You're good to go.")
 
 
-def update_command(n: Optional[int], cut_rev: Optional[str]) -> None:
+def update_command(n: Optional[int], cursor_rev: Optional[str], update_range: Optional[str]) -> None:
     signal_handler.SHOULD_INSTADIE = False
-    update(n if n is not None else 1, cut_rev)
+    if update_range is None or len(update_range) == 0:
+        start_commit = git.resolve_ref(Configuration.START_COMMIT)
+        end_commit = git.resolve_ref(Configuration.TRACKED_BRANCH)
+        update_range = f"{start_commit}..{end_commit}"
+    update(n if n is not None else 1, cursor_rev, update_range)
 
 
-def update(n: int, cut_commit: str) -> None:
-    fetch(n)
-    rev_list = storage.read_rev_list()
-    missing_commits = list(get_missing_commits(n)[::-1])
-    if cut_commit is not None:
-        cut_commit = git.resolve_ref(cut_commit.strip())
-        if cut_commit == "":
-            print(f"Invalid cut commit {cut_commit}.")
+def update(n: int, cursor_commit: Optional[str], update_range: str) -> None:
+    git.fetch()
+    if ".." not in update_range:
+        print("The update range must be in the format 'start_commit..end_commit'.")
+        sys.exit(1)
+
+    start_commit, end_commit = update_range.split("..", 1)
+    start_commit = git.resolve_ref(start_commit.strip())
+    if start_commit == "":
+        print(f"Invalid range: start commit {update_range.split("..", 1)[0]} was not found.")
+        sys.exit(1)
+    end_commit = git.resolve_ref(end_commit.strip())
+    if end_commit == "":
+        print(f"Invalid range: end commit {update_range.split("..", 1)[1]} was not found.")
+        sys.exit(1)
+
+    if cursor_commit is not None and len(cursor_commit) > 0:
+        cursor_commit_tmp = git.resolve_ref(cursor_commit.strip())
+        if cursor_commit_tmp == "":
+            print(f"The cursor commit {cursor_commit} could not be found.")
             sys.exit(1)
+        cursor_commit = cursor_commit_tmp
+    else:
+        cursor_commit = end_commit
 
-        cut = rev_list.index(cut_commit)
-        while cut > 0 and rev_list[cut] not in missing_commits:
-            cut -= 1
+    rev_list = git.query_rev_list(start_commit, end_commit)
+    if len(rev_list) == 0:
+        print("Invalid range: there were no commits found in that range.")
+        sys.exit(1)
+    cut = rev_list.index(cursor_commit)
+    if cut < 0:
+        print(f"The cursor commit {cursor_commit} was not in the commit range {update_range}.")
+        sys.exit(1)
+
+    missing_commits = list(get_missing_commits(rev_list, n)[::-1])
+    if len(missing_commits) == 0:
+        print("All commits in the specified range are already cached or ignored.")
+        sys.exit(0)
+    while rev_list[cut] not in missing_commits:
+        cut -= 1
         if cut < 0:
-            print("Unknown cut commit.")
-            sys.exit(1)
+            cut = len(rev_list) - 1
 
-        cut = missing_commits.index(rev_list[cut])
-        missing_commits = missing_commits[cut:] + missing_commits[:cut]
+    cut = missing_commits.index(rev_list[cut])
+    missing_commits = missing_commits[cut:] + missing_commits[:cut]
 
     if not factory.compile(missing_commits, should_compress=True, n=n, retry_compress=True):
         sys.exit(1)
@@ -180,7 +199,8 @@ def repro_command(execution_parameters: Optional[str], discard: bool, cached_onl
         project, issue, commit, project_or_issue_or_commit, execution_parameters)
     cached_commits = storage.get_present_commits()
     if commit is None:
-        rev_list = [rev for rev in storage.read_rev_list() if rev in cached_commits]
+        rev_list = git.query_rev_list(Configuration.START_COMMIT, Configuration.TRACKED_BRANCH)
+        rev_list = [rev for rev in rev_list if rev in cached_commits]
         if len(rev_list) > 0:
             commit = rev_list[-1]
         elif cached_only:
@@ -196,19 +216,21 @@ def repro_command(execution_parameters: Optional[str], discard: bool, cached_onl
             print("Try running without --cached-only or running an update or compile.")
             sys.exit(1)
 
-    launch_any(commit, execution_parameters, cached_commits, discard=discard, cache_only=False, wd=project)
+    if not launch_any(commit, execution_parameters, cached_commits, discard=discard, cache_only=False, wd=project):
+        sys.exit(1)
 
 
 def bisect_command(execution_parameters: Optional[str], discard: bool, cached_only: bool, ignore_date: bool, path_spec: Optional[str], project: Optional[str], issue: Optional[str], project_or_issue: list[str]) -> None:
     issue_time, _, execution_parameters, project = bisect.determine_execution_parameters(
-        project, issue, "", project_or_issue_or_commit, execution_parameters, commits=False)
+        project, issue, "", project_or_issue, execution_parameters, commits=False)
     if project is None:
         project = ""
     bisect(discard, cached_only, ignore_date, project, execution_parameters, path_spec, issue_time)
 
 
 def extract_command(rev: str, file_path: str) -> None:
-    storage.extract_commit(rev, file_path)
+    if not storage.extract_commit(rev, file_path):
+        sys.exit(1)
 
 
 def purge_command(mrps: bool, duplicates: bool) -> None:
@@ -220,19 +242,6 @@ def purge_command(mrps: bool, duplicates: bool) -> None:
     if mrps:
         purge_count += mrp_manager.purge_all()
     print(f"Purged {purge_count} items.")
-
-
-def fetch_command() -> None:
-    fetch()
-
-
-def fetch(n: int = 1) -> None:
-    print("Fetching...")
-    git.fetch()
-    rev_list = git.query_rev_list(Configuration.START_COMMIT, Configuration.TRACKED_BRANCH, path_spec="", before=n)
-    storage.write_rev_list(rev_list)
-
-    print(f"{len(get_missing_commits(n))} commits are waiting to be compiled.")
 
 
 def compile_command(revs: list[str]) -> None:
@@ -252,7 +261,8 @@ def compress_command(n: Optional[int], all: bool) -> None:
 
 def help_command() -> None:
     print("""Usage: bimon.py [-q/--quiet] [-v/--verbose] [-l/--live] COMMAND [COMMAND_ARG...]""")
-    
+
+
 def print_short_help() -> None:
     print("""Usage: bimon.py [-q/--quiet] [-v/--verbose] [-l/--live] COMMAND [COMMAND_ARG...]""")
     
@@ -263,9 +273,11 @@ def print_short_help() -> None:
 ###########################################################
 
 
-def get_missing_commits(n: int) -> list[str]:
-    rev_list = storage.read_rev_list()
+def get_missing_commits(rev_list: list[str], n: int) -> list[str]:
     present_commits = set(storage.get_present_commits())
+    present_commits.update(storage.get_ignored_commits())
+    if not Configuration.IGNORE_OLD_ERRORS:
+        present_commits.update(storage.get_compiler_error_commits())
     missing_commits = []
     sequential_missing = 0
     for i in range(len(rev_list)):

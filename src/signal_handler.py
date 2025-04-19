@@ -10,7 +10,7 @@ def _signal_handler(__sig, __frame) -> None:
     global SHOULD_EXIT
     if SHOULD_EXIT or SHOULD_INSTADIE:
         _thread_print("Second interrupt received, exiting immediately...")
-        sys.exit(0)
+        sys.exit(1)
     SHOULD_EXIT = True
     if SHOULD_PRINT:
         _thread_print(MESSAGE)

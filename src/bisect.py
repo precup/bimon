@@ -13,7 +13,6 @@ import src.git as git
 _should_pause = False
 _is_good = False
 _is_bad = False
-_command_log = []
 WARN_TIME = 60 * 60 * 24 * 7  # 1 week
 TMP_DIR = "tmp"
 
@@ -169,7 +168,8 @@ def determine_execution_parameters(
             commit = git.resolve_ref(commit)
         else:
             present_commits = storage.get_present_commits()
-            commit = next(commit for commit in storage.get_rev_list()[::-1] if commit in present_commits)
+            rev_list = git.query_rev_list(Configuration.START_COMMIT, Configuration.TRACKED_BRANCH)
+            commit = next(commit for commit in rev_list[::-1] if commit in present_commits)
     
     cached_commits = storage.get_present_commits()
     if execution_parameters is None:
@@ -179,7 +179,8 @@ def determine_execution_parameters(
         if project is None or project == "":
             project = mrp_manager.get_mrp(issue_number)
             if project == "":
-                sys.exit(1)
+                print("Nothing to do.")
+                sys.exit(0)
     if project.endswith(".zip"):
         project = mrp_manager.extract_mrp(project, issue_number)
         if project == "":
@@ -195,8 +196,12 @@ def determine_execution_parameters(
 
 
 def bisect(discard: bool, cache_only: bool, ignore_date: bool, project: str, execution_parameters: str, path_spec: str, issue_timestamp: int) -> None:
-    global _command_log
-    _command_log = []
+    try:
+        git.fetch()
+    except:
+        pass
+    if ignore_date:
+        issue_timestamp = -1
     if Configuration.ENABLE_HOTKEYS:
         pass # TODO
     if not os.path.exists(TMP_DIR):
@@ -210,16 +215,17 @@ def bisect(discard: bool, cache_only: bool, ignore_date: bool, project: str, exe
     bad_revisions = set()
     skipped_revisions = set()
     present_commits = storage.get_present_commits()
-    if len(storage.get_rev_list()) == 0:
-        print("No commit information found. Run fetch or update at least once first.")
-        sys.exit(1)
+    old_error_commits = set()
+    if not Configuration.IGNORE_OLD_ERRORS:
+        old_error_commits = storage.get_compiler_error_commits()
+    ignored_commits = storage.get_ignored_commits()
     rev_list = git.query_rev_list(Configuration.START_COMMIT, Configuration.TRACKED_BRANCH, path_spec=path_spec, before=issue_timestamp)
     if len(rev_list) == 0:
-        print("No matching commits found going back to the start commit.")
-        response = input("Would you like to set a temporary new start commit? (y/n): ")
+        print("No matching commits found going back to the start of the commit range.")
+        response = input("Would you like to set an earlier start commit? (y/n): ")
         if response.lower().startswith("y"):
             while True:
-                new_start_commit = input("Enter the new start commit: ")
+                new_start_commit = input("Enter a new start commit: ")
                 if git.resolve_ref(new_start_commit) == "":
                     print(f"Invalid commit: {new_start_commit}")
                     continue
@@ -254,7 +260,6 @@ def bisect(discard: bool, cache_only: bool, ignore_date: bool, project: str, exe
     time_since = time.time() - latest_known_time
     if time_since > WARN_TIME:
         print(f"Warning: The latest known commit is {int(time_since / 60 / 60 / 24)} days old.")
-        print(f"There hasn't been a fetch in a while, is either fetch or update running on a schedule?")
     time_since = time.time() - latest_present_time
     if time_since > WARN_TIME:
         print(f"Warning: The latest cached commit is {int(time_since / 60 / 60 / 24)} days old.")
@@ -269,6 +274,7 @@ def bisect(discard: bool, cache_only: bool, ignore_date: bool, project: str, exe
 
     remaining_revisions = list(rev_list)
     phase_two = False
+    has_unstarted = False
 
     print_status_message(good_revisions, bad_revisions, skipped_revisions, remaining_revisions, current_revision)
     while True:
@@ -277,8 +283,6 @@ def bisect(discard: bool, cache_only: bool, ignore_date: bool, project: str, exe
             if not command:
                 continue
 
-            if len(_command_log) > 0 and command != _command_log[-1]:
-                _command_log.append(command)
             parts = command.split()
             cmd = parts[0].lower()
             args = parts[1:]
@@ -335,6 +339,23 @@ def bisect(discard: bool, cache_only: bool, ignore_date: bool, project: str, exe
                 if len(possible_next_commits) == 0:
                     print("No more commits to test.")
                     continue
+                possible_unignored_commits = [commit for commit in possible_next_commits if commit not in ignored_commits]
+                possible_unerrored_commits = [commit for commit in possible_next_commits if commit not in old_error_commits]
+                possible_both_commits = [commit for commit in possible_unignored_commits if commit not in old_error_commits]
+                if len(possible_unerrored_commits) == 0:
+                    print("Every remaining commit failed to build in the past.")
+                    print("Picking one to test next anyways, but errors are likely.")
+                elif len(possible_unignored_commits) == 0:
+                    print("Every remaining commit is in ignored_commits.")
+                    print("Picking one to test next anyways, but it may be untestable.")
+                elif len(possible_both_commits) == 0:
+                    print("Every remaining commit is ignored or failed to build in the past.")
+                else:
+                    possible_next_commits = possible_both_commits
+                if len(possible_both_commits) == 0 and not has_unstarted and started:
+                    print("Disabling autoopen to avoid autocompiling untestable commits. It can be turned back on if you wanted it.")
+                    started = False
+                    has_unstarted = True
                 current_revision = possible_next_commits[0]
                 print_status_message(good_revisions, bad_revisions, skipped_revisions, remaining_revisions, current_revision)
                 if started:
@@ -353,6 +374,10 @@ def bisect(discard: bool, cache_only: bool, ignore_date: bool, project: str, exe
                 if resolved == "":
                     print(f"Invalid commit: {args[0]}")
                     continue
+                if resolved in old_error_commits:
+                    print("Warning: That commit has had compiler errors in the past. Trying to open anyways.")
+                elif resolved in ignored_commits:
+                    print("Warning: That commit is in ignored_commits. Trying to open anyways.")
                 current_revision = resolved
                 print("Opening commit", git.get_short_name(current_revision))
                 launch_any(current_revision, execution_parameters, present_commits, discard, cache_only, project)
@@ -413,7 +438,7 @@ def _print_help(args: list[str]) -> None:
     print("good, bad, skip, and unmark can be combined onto the same line.")
 
 
-def _update_revision_sets_from_command(command: list[str], current_commit: Optional[str], goods: set[str], bads: set[str], skips: set[str], path_spec: str) -> (list[str], str):
+def _update_revision_sets_from_command(command: list[str], current_commit: Optional[str], goods: set[str], bads: set[str], skips: set[str], path_spec: str, issue_timestamp: int) -> (list[str], str):
     sentences = []
     sentence = [command[0]]
     for arg in command[1:]:
@@ -477,20 +502,20 @@ def _update_revision_sets_from_command(command: list[str], current_commit: Optio
     temp_skips.update(new_skips)
 
     if len(temp_bads) == 0:
-        rev_list = list(storage.read_rev_list()[::-1])
-        if rev_list[0] in temp_goods:
-            print("The latest commit was marked as good, so there's nothing left to do.")
-            print("You can try fetching to see if there are new commits.")
-            sys.exit(0)
+        range_end = git.resolve_ref(Configuration.TRACKED_BRANCH)
+        if range_end in temp_goods:
+            print("The last commit in the range got marked as good, so there's no possible end point for the bisect. Ignoring command.")
+            print("Perhaps the issue has already been fixed?")
+            return [], path_spec
         print("No bad commits found yet. Using the latest to try finding one.")
         bisect_commits = rev_list
         for good in temp_goods:
-            query_revs = set(git.query_rev_list(Configuration.START_COMMIT, good))
+            query_revs = set(git.query_rev_list(Configuration.START_COMMIT, good, path_spec=path_spec, before=issue_timestamp))
             bisect_commits = [commit for commit in bisect_commits if commit not in query_revs]
     elif len(temp_goods) == 0:
         if git.resolve_ref(Configuration.START_COMMIT) in temp_bads:
-            print("START_COMMIT was marked as bad, so there's no longer a start point for the bisect.")
-            response = input("Would you like to set a temporary new start commit? (y/n): ")
+            print("The first commit in the range is marked as bad, so there's no possible start point for the bisect.")
+            response = input("Would you like to set an earlier start commit? (y/n): ")
             if response.lower().startswith("y"):
                 while True:
                     new_start_commit = input("Enter the new start commit: ")
@@ -498,15 +523,20 @@ def _update_revision_sets_from_command(command: list[str], current_commit: Optio
                         print(f"Invalid commit: {new_start_commit}")
                         continue
                     Configuration.START_COMMIT = new_start_commit
-                    rev_list = git.query_rev_list(Configuration.START_COMMIT, Configuration.TRACKED_BRANCH)
-                    return rev_list, path_spec
-            else:
-                print("Nothing to be done, then.")
-                sys.exit(0)
+                    rev_list = git.query_rev_list(Configuration.START_COMMIT, Configuration.TRACKED_BRANCH, path_spec=path_spec, before=issue_timestamp)
+                    if len(rev_list) > 0:
+                        return rev_list, path_spec
+                    
+                    print("No matching commits found going back to that commit, either.")
+                    response = input("Would you like to try another start commit? (y/n): ")
+                    if not response.lower().startswith("y"):
+                        break
+            print("Nothing to be done, then.")
+            sys.exit(0)
         print("No good commits found yet. Using early commits to try finding one.")
-        bisect_commits = storage.get_rev_list()
+        bisect_commits = git.query_rev_list(Configuration.START_COMMIT, Configuration.TRACKED_BRANCH, path_spec=path_spec, before=issue_timestamp)
         for bad in temp_bads:
-            query_revs = set(git.query_rev_list(Configuration.START_COMMIT, bad))
+            query_revs = set(git.query_rev_list(Configuration.START_COMMIT, bad, path_spec=path_spec, before=issue_timestamp))
             bisect_commits = [commit for commit in bisect_commits if commit in query_revs]
     else:
         bisect_commits = git.get_bisect_commits(temp_goods, temp_bads, path_spec)
@@ -515,7 +545,6 @@ def _update_revision_sets_from_command(command: list[str], current_commit: Optio
             print("That would result in no possible remaining commits.")
             bisect_commits = git.get_bisect_commits(temp_goods, temp_bads, "")
             if len(bisect_commits) > 0:
-                # ask the user "Perhaps your path spec is too restrictive. Would you like to continue without it?"
                 response = input("Perhaps your path spec is too restrictive. Would you like to continue without it? (y/n): ")
                 if response.lower().startswith("y"):
                     path_spec = ""

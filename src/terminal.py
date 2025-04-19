@@ -202,6 +202,13 @@ def execute_in_subwindow(command: list[str], title: str, rows: int, cwd: Optiona
                         clear_line()
                 move_rows_up(lines_printed)
                 lines_printed = len(window_lines) + 2
+                # TODO remove this once the bug has been tracked down
+                if any(len(item) != 2 for item in window_lines):
+                    print("Output lines:", output_lines[-max(rows, len(output_lines)):])
+                    print("Window lines:", window_lines)
+                    print("Cols:", cols)
+                    print("About to cause a crash anyways, exiting.")
+                    sys.exit(1)
                 output = "\n".join(
                     "\033[2K" + "".join(ansi_stack) + line_text 
                     for ansi_stack, line_text in window_lines
@@ -220,12 +227,11 @@ def execute_in_subwindow(command: list[str], title: str, rows: int, cwd: Optiona
         elif Configuration.PRINT_MODE == PrintMode.QUIET:
           stdout = subprocess.DEVNULL
           stderr = subprocess.DEVNULL
-        elif Configuration.PRINT_MODE == PrintMode.VERBOSE:
-          stdout = sys.stdout
-          stderr = sys.stderr
         else:
-          print(f"Unrecoverable internal error: unknown print mode {Configuration.PRINT_MODE}.")
-          sys.exit(1)
+            if Configuration.PRINT_MODE != PrintMode.VERBOSE:
+                print(f"Internal error: unknown print mode {Configuration.PRINT_MODE}. Falling back to VERBOSE.")
+            stdout = sys.stdout
+            stderr = sys.stderr
         process = subprocess.Popen(
             command,
             stdout=stdout,

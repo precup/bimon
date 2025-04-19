@@ -74,6 +74,9 @@ class Configuration:
             else:
                 print(f"Neither config.ini nor {default_config_path} found and no --config provided. Exiting.")
                 sys.exit(1)
+        elif not os.path.exists(filepath):
+            print(f"The file passed to --config could not be opened. Exiting.")
+            sys.exit(1)
         config.read(filepath)
 
         # General settings

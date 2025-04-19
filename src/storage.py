@@ -1,15 +1,13 @@
 import os
 import shutil
 from pathlib import Path
-from typing import Optional
 import tarfile
 import lzma
 
+IGNORE_FILE = "ignored_commits"
+COMPILE_ERROR_FILE = "compile_error_commits"
 COMPRESS_MAP = "compress_map"
-REV_LIST = "rev_list"
 VERSIONS_DIR = "versions"
-
-_rev_list_cache = None
 
 
 def init_storage() -> None:
@@ -17,8 +15,6 @@ def init_storage() -> None:
         os.mkdir(VERSIONS_DIR)
     if not os.path.exists(COMPRESS_MAP):
         Path(COMPRESS_MAP).touch()
-    if not os.path.exists(REV_LIST):
-        Path(REV_LIST).touch()
 
 
 def write_compress_map(compress_map: dict[str, str]) -> None:
@@ -44,24 +40,6 @@ def add_to_compress_map(commit: str, location: str) -> None:
     compress_map = read_compress_map()
     compress_map[commit] = location
     write_compress_map(compress_map)
-
-
-def write_rev_list(rev_list: list[str]) -> None:
-    with open(REV_LIST, "w") as f:
-        f.writelines([f"{commit}\n" for commit in rev_list])
-        _rev_list_cache = rev_list
-
-
-def read_rev_list() -> list[str]:
-    global _rev_list_cache
-    if _rev_list_cache is not None:
-        return _rev_list_cache
-    if not os.path.exists(REV_LIST):
-        return []
-    with open(REV_LIST, "r") as f:
-        _rev_list_cache = [line.strip() for line in f.readlines() if len(line.strip()) > 0]
-        return _rev_list_cache
-    return []
 
 
 def get_present_commits() -> set[str]:
@@ -176,21 +154,38 @@ def compress_bundle(bundle_id: str, bundle: list[str]) -> bool:
 
 
 def get_unbundled_files() -> list[str]:
-    rev_list = read_rev_list()
     compress_map = read_compress_map()
     return [
         path for path in os.listdir(VERSIONS_DIR) 
-        if path in rev_list and path not in compress_map
+        if path not in compress_map and git.resolve_ref(path) == path
     ]
 
 
 def get_ignored_commits() -> set[str]:
-    pass
+    if not os.path.exists(IGNORE_FILE):
+        return set()
+    with open(IGNORE_FILE, "r") as f:
+        result = set()
+        for line in f.readlines():
+            if len(line.strip()) > 0:
+                result += set(line.strip().split())
+        return result
 
 
 def get_compiler_error_commits() -> set[str]:
-    pass
+    if not os.path.exists(COMPILE_ERROR_FILE):
+        return set()
+    with open(COMPILE_ERROR_FILE, "r") as f:
+        result = set()
+        for line in f.readlines():
+            if len(line.strip()) > 0:
+                result += set(line.strip().split())
+        return result
 
 
 def add_compiler_error_commits(commits: list[str]) -> None:
-    pass
+    old_errors = get_compiler_error_commits()
+    new_errors = set(commits) - old_errors
+    with open(COMPILE_ERROR_FILE, "a") as f:
+        for commit in new_errors:
+            f.write(f"{commit}\n")
