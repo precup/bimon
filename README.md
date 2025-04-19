@@ -107,43 +107,41 @@ Once the editor opens, you should attempt to reproduce the bug. Then, either hit
 - better help command
 - better fault tolerance
 - check which arguments are required and which aren't
-- should force be the default?
 - check sys.exit codes
 - weird behavior for extremely small commit range (1 commit, etc)
-
-Design questions
-  Should repro start from the issue timestamp or the latest?
-  Should force be default?
-  What should the bisect exit message contain?
-  What commands should bisect support to let you examine the remaining commits?
-  How should I handle failed bundling? How should I handle failed compiles?
-
-Bisect
-- use an empty project if none exists
-- start at start date of issue?
-- path-spec should probably be vararg or split
-- Exit message
-- add git-rev lookup info in addition to exit g and b info?
-- Add visualize subcommand
-- Add list subcommand
-- Autoextract nexts
-- Test bisect
-Commands
-- add repro command
-- Add init command
-- Get venv and python deps handled actually correctly, update setup docs
-Misc
-- mrps outside the issue body
-- macos support
-- bundles that fail to compress should be removed
-- compression still fails sometimes
-Input/Output
-- Hotkey testing and support
+- testing
+    non LLVM build outputs
 - Add help subcommand
-- bisect history support?
-- handle bisect ctrl c
-- Better output, colors, support printmode, text decorations?
-- Time estimates, heat map, progress bar for compilation
-- Compiler output cannot be properly Ctrl C'd
-- Compiler output can occur during bisects
-- use git.get_short_name in outputs
+- window resizing support?
+- find mentioned commits?
+- fullscreen mode?
+- caching?
+- Ctrl C in the middle of print can cause issues
+
+24 Functional
+  - 2 path spec should allow you to test commits outside that set if that's the only precompiled
+  - 2 allow cut revs that aren't in START_COMMIT..TRACKED_BRANCH
+
+  - 3 Hotkeys
+
+  - 2 macos support
+  - 4 redo windows support, mostly tty stuff
+
+  - 4 Optimize decompression times, redo bundles to match
+  - 2 Autoextract nexts
+
+  - 4 deal with compiler errors
+      In mark_error, add it to compile_error_commits. 
+      Never attempt to compile compile_error_commits unless specifically requested or IGNORE_OLD_ERRORS
+      Add separate ignore_commits file
+
+10 Interface
+  1 Arguments
+  - 1 path-spec should probably be vararg or split
+  9 Finishing touches
+  - 1 Add init command
+  - 1 Get venv and python deps handled actually correctly
+  - 2 Support command completion
+  - 2 Better output, colors, text decorations?
+  - 2 handle non live printmodes
+  - 1 progress bar feels a bit cluttered

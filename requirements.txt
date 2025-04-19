@@ -1,0 +1,15 @@
+beautifulsoup4==4.13.4
+bs4==0.0.2
+certifi==2025.1.31
+charset-normalizer==3.4.1
+gitdb==4.0.12
+GitPython==3.1.44
+idna==3.10
+keyboard==0.13.5
+keyboard-crossplatform==0.1.0
+ptyprocess==0.7.0
+requests==2.32.3
+smmap==5.0.2
+soupsieve==2.6
+typing_extensions==4.13.2
+urllib3==2.4.0

@@ -23,8 +23,10 @@ class Configuration:
     """
     # General settings
     START_COMMIT: str
+    TRACKED_BRANCH: str
     WORKSPACE_PATH: str
-    FORCE: bool
+    FORCE: bool = False
+    IGNORE_OLD_ERRORS: bool = False
 
     # Hotkey settings
     ENABLE_HOTKEYS: bool
@@ -45,9 +47,13 @@ class Configuration:
     PRINT_MODE: PrintMode = PrintMode.VERBOSE
     COLOR_ENABLED: bool
     MESSAGE_COLOR: str
+    IMPORTANT_COLOR: str
     COMMIT_COLOR: str
+    GOOD_COLOR: str
     ERROR_COLOR: str
     WARNING_COLOR: str
+    PROGRESS_FOREGROUND_COLOR: str
+    PROGRESS_BACKGROUND_COLOR: str
     HEATMAP_COLORS: list[str]
     
     def load_from(filepath: str = ""):
@@ -72,14 +78,21 @@ class Configuration:
 
         # General settings
         Configuration.START_COMMIT = config.get("General", "start_commit")
+        Configuration.TRACKED_BRANCH = config.get("General", "tracked_branch")
         Configuration.WORKSPACE_PATH = config.get("General", "workspace_path")
+        Configuration.FORCE = Configuration.is_subdirectory(Configuration.WORKSPACE_PATH, os.getcwd())
 
         # Output settings
+        Configuration.SUBWINDOW_ROWS = config.getint("Output", "subwindow_rows")
         Configuration.COLOR_ENABLED = config.getboolean("Output", "color_enabled")
         Configuration.MESSAGE_COLOR = config.get("Output", "message_color")
+        Configuration.IMPORTANT_COLOR = config.get("Output", "important_color")
         Configuration.COMMIT_COLOR = config.get("Output", "commit_color")
+        Configuration.GOOD_COLOR = config.get("Output", "good_color")
         Configuration.ERROR_COLOR = config.get("Output", "error_color")
         Configuration.WARNING_COLOR = config.get("Output", "warning_color")
+        Configuration.PROGRESS_FOREGROUND_COLOR = config.get("Output", "progress_foreground_color")
+        Configuration.PROGRESS_BACKGROUND_COLOR = config.get("Output", "progress_background_color")
         Configuration.HEATMAP_COLORS = config.get("Output", "heatmap_colors").split()
 
         # Hotkey settings
@@ -97,3 +110,9 @@ class Configuration:
 
         # Execution settings
         Configuration.DEFAULT_EXECUTION_PARAMETERS = config.get("Execution", "execution_parameters")
+
+
+    def is_subdirectory(path: str, directory: str) -> bool:
+        path = os.path.abspath(path)
+        directory = os.path.abspath(directory)
+        return os.path.commonpath([path, directory]) == directory

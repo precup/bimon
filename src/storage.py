@@ -9,6 +9,9 @@ COMPRESS_MAP = "compress_map"
 REV_LIST = "rev_list"
 VERSIONS_DIR = "versions"
 
+_rev_list_cache = None
+
+
 def init_storage() -> None:
     if not os.path.exists(VERSIONS_DIR):
         os.mkdir(VERSIONS_DIR)
@@ -46,13 +49,19 @@ def add_to_compress_map(commit: str, location: str) -> None:
 def write_rev_list(rev_list: list[str]) -> None:
     with open(REV_LIST, "w") as f:
         f.writelines([f"{commit}\n" for commit in rev_list])
+        _rev_list_cache = rev_list
 
 
 def read_rev_list() -> list[str]:
+    global _rev_list_cache
+    if _rev_list_cache is not None:
+        return _rev_list_cache
     if not os.path.exists(REV_LIST):
-        return {}
+        return []
     with open(REV_LIST, "r") as f:
-        return [line.strip() for line in f.readlines() if len(line.strip()) > 0]
+        _rev_list_cache = [line.strip() for line in f.readlines() if len(line.strip()) > 0]
+        return _rev_list_cache
+    return []
 
 
 def get_present_commits() -> set[str]:
@@ -77,14 +86,37 @@ def extract_commit(commit: str, target: str) -> bool:
     if not bundle_id:
         print(f"Extraction failed, commit {commit} not found in storage.")
         return False
-        
+
     try:
         with tarfile.open(os.path.join(VERSIONS_DIR, f"{bundle_id}.tar.xz"), mode="r:xz") as tar:
-            tar.extract(member=commit, path=VERSIONS_DIR)
+            tar.extract(member=os.path.join(VERSIONS_DIR, commit), path=VERSIONS_DIR)
     except tarfile.TarError as e:
         print(f"Extraction failed during decompression with error {e}.")
         return False
+    except KeyError as e:
+        print("Falling back to old decompression method.")
+        # TODO remove this once I've cleaned up old bundles
+        # TODO test whether this can be made faster
+        try:
+            with tarfile.open(os.path.join(VERSIONS_DIR, f"{bundle_id}.tar.xz"), mode="r:xz") as tar:
+                tar.extract(member=commit, path=VERSIONS_DIR)
+        except tarfile.TarError as e:
+            print(f"Extraction failed during decompression with error {e}.")
+            return False
     
+    inner_dir = os.path.join(VERSIONS_DIR, VERSIONS_DIR)
+    if os.path.exists(inner_dir):
+        for path in os.listdir(inner_dir):
+            if not os.path.exists(os.path.join(VERSIONS_DIR, path)):
+                shutil.move(os.path.join(inner_dir, path), os.path.join(VERSIONS_DIR, path))
+        shutil.rmtree(inner_dir)
+
+    # TODO shouldn't be needed, old bundles need it though
+    try:
+        os.chmod(tar_output_file, os.stat(tar_output_file).st_mode | os.stat.S_IXUSR | os.stat.S_IXGRP | os.stat.S_IXOTH)
+    except:
+        pass
+
     if target != tar_output_file:
         shutil.move(tar_output_file, target)
     return True
@@ -122,8 +154,12 @@ def compress_with_lzma(bundle_path: str, file_paths: list[str]) -> None:
 def compress_bundle(bundle_id: str, bundle: list[str]) -> bool:
     bundle_path = os.path.join(VERSIONS_DIR, f"{bundle_id}.tar.xz")
     if os.path.exists(bundle_path):
-        print(f"Bundle {bundle_id} already exists. Skipping.")
-        return False
+        valid_bundles = read_compress_map().values()
+        if bundle_id in valid_bundles:
+            print(f"Bundle {bundle_id} already exists. Skipping.")
+            return False
+        print("Bundle already exists but is invalid, removing and rebuilding.")
+        os.remove(bundle_path)
     commit_paths = [os.path.join(VERSIONS_DIR, commit) for commit in bundle]
     try:
         compress_with_lzma(bundle_path, commit_paths)
@@ -146,3 +182,15 @@ def get_unbundled_files() -> list[str]:
         path for path in os.listdir(VERSIONS_DIR) 
         if path in rev_list and path not in compress_map
     ]
+
+
+def get_ignored_commits() -> set[str]:
+    pass
+
+
+def get_compiler_error_commits() -> set[str]:
+    pass
+
+
+def add_compiler_error_commits(commits: list[str]) -> None:
+    pass
