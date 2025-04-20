@@ -6,6 +6,7 @@ SHOULD_PRINT = True
 SHOULD_INSTADIE = True
 MESSAGE = "Interrupt received, exiting after this step. Send another to exit now."
 
+
 def _signal_handler(__sig, __frame) -> None:
     global SHOULD_EXIT
     if SHOULD_EXIT or SHOULD_INSTADIE:
@@ -21,10 +22,10 @@ def _thread_print(message: str) -> None:
         print(message)
     except RuntimeError:
         # This may happen if the interrupt is received
-        # while printing since print is not thread-safe
+        # while in the middle of a print call since 
+        # print does not allow re-entrance
         # TODO: Inform the user somehow anyways
         pass
-
 
 
 def install() -> None:

@@ -1,12 +1,17 @@
 import functools
-import subprocess
 import shlex
-from src.config import Configuration
+import subprocess
+
 import src.terminal as terminal
 
-def clone(repository, location) -> None:
+from src.config import Configuration
+
+_commit_time_cache = {}
+
+
+def clone(repository: str, target: str) -> None:
     try:
-        os.system(f"git clone {repository} {location}")
+        os.system(f"git clone {repository} {target}")
         return True
     except:
         return False
@@ -30,21 +35,30 @@ def get_git_output(args: list[str]) -> str:
         return ""
 
 
-@functools.lru_cache(maxsize=2048)
 def get_commit_time(commit: str) -> int:
+    if commit in _commit_time_cache:
+        return _commit_time_cache[commit]
     try:
-        return int(get_git_output(["show", "-s", "--format=%ct", commit]))
+        retval = int(get_git_output(["show", "-s", "--format=%ct", commit]))
     except:
-        return -1
+        retval = -1
+    _commit_time_cache[commit] = retval
+    return retval
 
 
-# TODO caching
 def get_commit_times(commits: list[str]) -> dict[str, int]:
+    result = {
+        commit: _commit_time_cache[commit] for commit in commits
+        if commit in _commit_time_cache
+    }
+    commits = [commit for commit in commits if commit not in result]
     if len(commits) == 0:
-        return {}
+        return result
     try:
         lines = get_git_output(["show", "-s", "--format=%ct"] + commits).split()
-        return {commits[i]: int(lines[i]) for i in range(len(commits))}
+        result.update({commits[i]: int(lines[i]) for i in range(len(commits))})
+        _commit_time_cache.update(result)
+        return result
     except:
         return {}
 
@@ -74,26 +88,30 @@ def get_short_log(commit: str) -> str:
 
 @functools.lru_cache(maxsize=None)
 def resolve_ref(ref: str) -> str:
-    return get_git_output(["rev-parse", ref])
+    return get_git_output(["rev-parse", "--revs-only", ref])
+
+
+def query_rev_list(start_ref: str, end_ref: str, path_spec: str = "", before: int = -1) -> list[str]:
+    return list(_query_rev_list(start_ref, end_ref, path_spec, before))
 
 
 @functools.lru_cache
-def query_rev_list(start_ref: str, end_ref: str, path_spec: str = "", before: int = -1) -> list[str]:
+def _query_rev_list(start_ref: str, end_ref: str, path_spec: str = "", before: int = -1) -> list[str]:
     command = ["rev-list", "--reverse", f"{start_ref}..{end_ref}"]
     if before >= 0:
         command += [f"--before={before}"]
-    if path_spec.strip() != "":
-        command += [f"--", shlex.split(path_spec)]
+    if path_spec:
+        command += [f"--"] + shlex.split(path_spec)
     output = get_git_output(command)
     return [k.strip() for k in output.split() if k.strip() != ""]
 
 
-def get_bisect_commits(good_commits: set[str], bad_commits: set[str], path_spec: str, before: int = -1) -> list[str]:
+def get_bisect_commits(good_commits: set[str], bad_commits: set[str], path_spec: str = "", before: int = -1) -> list[str]:
     command = ["rev-list", "--bisect-all"] + [f"^{commit}" for commit in good_commits] + list(bad_commits)
     if before >= 0:
         command += [f"--before={before}"]
-    if path_spec.strip() != "":
-        command += [f"--", shlex.split(path_spec)]
+    if path_spec:
+        command += [f"--"] + shlex.split(path_spec)
     output = get_git_output(command)
     return [line.strip().split()[0].strip() for line in output.splitlines() if len(line.strip()) > 0]
 

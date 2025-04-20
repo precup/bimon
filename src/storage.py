@@ -1,13 +1,22 @@
+import lzma
 import os
 import shutil
-from pathlib import Path
+import stat
 import tarfile
-import lzma
+
+from pathlib import Path
+
+import src.git as git
+
+from src.pooled_executor import PooledExecutor
 
 IGNORE_FILE = "ignored_commits"
 COMPILE_ERROR_FILE = "compile_error_commits"
 COMPRESS_MAP = "compress_map"
 VERSIONS_DIR = "versions"
+
+_use_decompress_queue = False
+_decompress_queue = None
 
 
 def init_storage() -> None:
@@ -15,6 +24,22 @@ def init_storage() -> None:
         os.mkdir(VERSIONS_DIR)
     if not os.path.exists(COMPRESS_MAP):
         Path(COMPRESS_MAP).touch()
+
+
+def init_decompress_queue() -> None:
+    if not _use_decompress_queue:
+        _decompress_queue = PooledExecutor(
+            task_fn=_extract_commit, pool_size=2
+        )
+        _use_decompress_queue = True
+
+
+def set_decompress_queue(commits: list[str]) -> None:
+    if not _use_decompress_queue:
+        return
+    _decompress_queue.enqueue_tasks(
+        [(commit, (commit,)) for commit in commits]
+    )
 
 
 def write_compress_map(compress_map: dict[str, str]) -> None:
@@ -49,8 +74,16 @@ def get_present_commits() -> set[str]:
     )
 
 
-def extract_commit(commit: str, target: str) -> bool:
+def extract_commit(commit: str, target: str = "") -> bool:
+    if _use_decompress_queue:
+        _decompress_queue.enqueue_and_wait([(commit, (commit,))])
+    return _extract_commit(commit, target)
+
+
+def _extract_commit(commit: str, target: str = "") -> bool:
     tar_output_file = os.path.join(VERSIONS_DIR, commit)
+    if target == "":
+        target = tar_output_file
     if target != tar_output_file and os.path.exists(target):
         print("Extraction failed, target already exists.")
         return False
@@ -91,7 +124,7 @@ def extract_commit(commit: str, target: str) -> bool:
 
     # TODO shouldn't be needed, old bundles need it though
     try:
-        os.chmod(tar_output_file, os.stat(tar_output_file).st_mode | os.stat.S_IXUSR | os.stat.S_IXGRP | os.stat.S_IXOTH)
+        os.chmod(tar_output_file, os.stat(tar_output_file).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except:
         pass
 

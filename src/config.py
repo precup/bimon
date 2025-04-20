@@ -1,6 +1,7 @@
 import configparser
 import os
 import sys
+
 from enum import Enum
 
 CONFIG_PATH = "config.ini"
@@ -22,11 +23,12 @@ class Configuration:
     If config.ini is not present, it falls back to the platform default.
     """
     # General settings
-    START_COMMIT: str
-    TRACKED_BRANCH: str
+    RANGE_START: str
+    RANGE_END: str
     WORKSPACE_PATH: str
     FORCE: bool = False
     IGNORE_OLD_ERRORS: bool = False
+    PATH_SPEC: str = ""
 
     # Hotkey settings
     ENABLE_HOTKEYS: bool
@@ -45,6 +47,7 @@ class Configuration:
 
     # Output settings
     PRINT_MODE: PrintMode = PrintMode.VERBOSE
+    SHOW_TAGS_ON_HISTOGRAM: bool = True
     COLOR_ENABLED: bool
     MESSAGE_COLOR: str
     IMPORTANT_COLOR: str
@@ -80,13 +83,14 @@ class Configuration:
         config.read(filepath)
 
         # General settings
-        Configuration.START_COMMIT = config.get("General", "start_commit")
-        Configuration.TRACKED_BRANCH = config.get("General", "tracked_branch")
+        Configuration.RANGE_START = config.get("General", "range_start")
+        Configuration.RANGE_END = config.get("General", "range_end")
         Configuration.WORKSPACE_PATH = config.get("General", "workspace_path")
-        Configuration.FORCE = Configuration.is_subdirectory(Configuration.WORKSPACE_PATH, os.getcwd())
+        Configuration.FORCE = Configuration._is_subdirectory(Configuration.WORKSPACE_PATH, os.getcwd())
 
         # Output settings
         Configuration.SUBWINDOW_ROWS = config.getint("Output", "subwindow_rows")
+        Configuration.SHOW_TAGS_ON_HISTOGRAM = config.getboolean("Output", "show_tags_on_histogram")
         Configuration.COLOR_ENABLED = config.getboolean("Output", "color_enabled")
         Configuration.MESSAGE_COLOR = config.get("Output", "message_color")
         Configuration.IMPORTANT_COLOR = config.get("Output", "important_color")
@@ -115,7 +119,7 @@ class Configuration:
         Configuration.DEFAULT_EXECUTION_PARAMETERS = config.get("Execution", "execution_parameters")
 
 
-    def is_subdirectory(path: str, directory: str) -> bool:
+    def _is_subdirectory(path: str, directory: str) -> bool:
         path = os.path.abspath(path)
         directory = os.path.abspath(directory)
         return os.path.commonpath([path, directory]) == directory

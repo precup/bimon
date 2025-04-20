@@ -111,8 +111,8 @@ src/mrp_manager.py:32:            sys.exit(1)
 src/mrp_manager.py:212:            sys.exit(1)
 bisect needs to handle its own error codes
 
-32 Functional
-  17 Major
+31 Functional
+  25 Major
   - 3 Hotkeys
 
   - 2 MacOS support
@@ -123,36 +123,55 @@ bisect needs to handle its own error codes
   - 4 Optimize decompression times, redo bundles to match
   - 4 Autoextract next possible commits in threads while bisecting
         get_next_commits needs updating
-        
-  - 2 path spec should allow you to test commits outside that set if that's the only precompiled
-  15 Minor
+  - 8 zip mode
+        conversion command
+  14 Minor
   - 1 audit behavior for extremely small commit ranges (1 commit, etc)
   - 2 use the commit range arguments everywhere
         add initial range argument to bisect
-  - 1 add a percentage display to the full histogram
-  - 1 warn repro (maybe others) about ignored or error commits
   - 1 defend against size 0 ranges
-  - 2 ValueError: too many values to unpack (expected 2) still exists
-  - 1 Add anything else useful to the init command
-        validate config
-        commit range should be extant
-  - 1 Finalize requirements.txt
-  - 1 get_commit_times caching
   - 1 bisect error codes
   - 1 bisect:320 no more commits to test (expand range?)
+  - 1 fix bugs with start_commit not being included in rev-lists
+  - 1 check that is_ancestor being false for self isn't a problem
+  - 1 startup check for range validity
+  - 1 keep track of a latest commit for repro instead of using the range?
+  - 1 check that I don't assume range_start and range_end are resolved
+  - 1 ctrl c jumps up by 1 and overwrites the bottom bar of the compiler output
+  - 1 progress bar clips onto next line, bland line before histogram line??
+  - 1 signal handler death message is incorrect for instadie modes
+  - 1 some inputs should allow enter for y probably
+  - 1 open the issue page on repro?
+  - 3 analyze a batch of issues
+  - 1 add issue number to project title
+  - 1 couldn't find that one MRP in the comments
+  - 1 fast way to upload mrp
+  - 1 cache before using so you don't have to reunpack on ctrl c
 
-8 Finishing touches
+Should more things fetch?
+allow pasting zip urls for projects?
+
+10 Finishing touches
+- 1 Add anything else useful to the init command
+      validate config
+      commit range should be extant
+      binary name
+- 1 Finalize requirements.txt
 - 2 Support command completion
 - 2 Better output, colors, text decorations?
 - 2 handle non live printmodes
 - 1 progress bar feels a bit cluttered
 - 1 boolean arguments shouldn't require the positionals, really awkward
+- 1 allow for ranges in commit lists
+- 1 get rid of warning on projects opened for the first time
 
 Clean up
 - Code clean up pass
 - Repo organization pass
-- Use types consistently
+- Use types consistently (dict vs Dict?)
 - Run a linter
+- Use correct ref/rev for git stuff
+- Consistent use of is not None vs truthiness
 
 Testing
 - General
@@ -163,6 +182,7 @@ Testing
 Documentation
 - Write README.md
 - Write main help command
+    defaults don't show up properly in help
 - Update argparser help strings
 - Write help subcommand
 
@@ -171,3 +191,6 @@ Someday?
 - Find commits mentioned in the issue
 - Fullscreen update mode
 - SIGINT doesn't print if triggered in the middle of another print
+- path spec should allow you to test commits outside that set if that's the only precompiled
+- Corrupted binaries aren't handled at all
+    Does killing the extraction threads litter the version space?

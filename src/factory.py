@@ -1,16 +1,19 @@
 import os
+import shlex
 import shutil
 import sys
 import time
-import shlex
+import stat
 
-from src.config import Configuration, PrintMode
+from typing import Optional
+
 import src.git as git
 import src.signal_handler as signal_handler
 import src.storage as storage
 import src.terminal as terminal
 
-successes = 0
+from src.config import Configuration, PrintMode
+
 MIN_SUCCESSES = 3
 error_commits = set()
 
@@ -80,17 +83,10 @@ def split_list(lst: list, x: int) -> list[list]:
 
 
 def print_compile_status(tags: list[str], rev_list: list[str], present_commits: set[str], current_i: int, commits: list[str], times: dict[str, float], error_commits: list[str]) -> None:
-    tags = [tag for tag in tags if tag.find(".") == tag.rfind(".")]
-    tag_times = git.get_commit_times(tags)
-    tag_times = {
-        tag[:tag.find("-")]: tag_time
-        for tag, tag_time in tag_times.items()
-    }
-    box_side = "┃"
     cols = terminal.get_cols()
     print(terminal.box_top(title=terminal.color_key(f" Compiling #{current_i + 1} of {len(commits)} ")))
     
-    percent_done = int(current_i / len(commits) * 100)
+    percent_done = int(current_i / max(1, len(commits)) * 100)
     average_time = sum(times.values()) / len(times) if times else 0
     average_time_str = "--:--"
     if average_time > 0:
@@ -112,38 +108,37 @@ def print_compile_status(tags: list[str], rev_list: list[str], present_commits: 
             remaining_time_str = f"{minutes:02}:{seconds:02}"
     remaining_time_str = terminal.color_key(remaining_time_str)
     error_str = terminal.color_bad(f"{len(error_commits)}") if len(error_commits) > 0 else terminal.color_good("0")
-    terminal.print_fit_line(
-        f"Average time: {average_time_str}, Remaining time: {remaining_time_str}, Errors: {error_str}",
-        start=box_side, end=box_side
-    )
-    terminal.print_fit_line(
-        terminal.trim_str(f"Current commit: {git.get_short_log(commits[current_i])}", cols - 4),
-        start=box_side, end=box_side
-    )
-    progress_start = box_side + " Job progress (" + terminal.color_key(f"{percent_done:2d}%") + "): "
-    print(progress_start, end="")
-    terminal.print_progress_bar(cols - terminal.escape_len(progress_start) - 2, float(current_i) / len(commits))
-    print(" " + box_side)
-    terminal.print_fit_line("", start=box_side, end=box_side)
-    print(terminal.box_middle(title=" Full Range Timeline Histogram "))
-    split_revs = split_list(rev_list, cols - 4)
-    buckets = [
-        sum(1 for rev in split_revs[j] if rev in present_commits) / len(split_revs[j])
-        for j in range(len(split_revs))
-    ]
-    buckets += [0] * max(0, cols - 4 - len(buckets))
-    commit_times = git.get_commit_times(
-        [split_revs[i][0] for i in range(len(buckets)) if len(split_revs[i]) > 0]
-    )
-    bucket_times = [
-        commit_times[split_revs[i][0]] if len(split_revs[i]) > 0 else -1
-        for i in range(len(buckets))
-    ]
+    print(terminal.box_fit(
+        f"Average time: {average_time_str}, Remaining time: {remaining_time_str}, Errors: {error_str}"
+    ))
+    print(terminal.box_fit(
+        terminal.trim_str(f"Current commit: {git.get_short_log(commits[current_i])}", cols - 4)
+    ))
+    progress_bar = "Job progress (" + terminal.color_key(f"{percent_done:2d}%") + "): "
+    progress_bar += terminal.progress_bar(cols - terminal.escape_len(progress_bar) - 2, float(current_i) / max(1, len(commits)))
+    print(terminal.box_fit(progress_bar))
+    print(terminal.box_fit(""))
+
+    current_bucket = print_histogram(cols, rev_list, tags, commits[current_i], present_commits)
+    bottom = terminal.box_bottom()
+    if current_bucket is not None:
+        bottom = bottom[:current_bucket + 2] + terminal.color_key("^") + bottom[current_bucket + 3:]
+    print(bottom)
+
+
+def get_fraction_completed(rev_list: list[str], present_commits: set[str]) -> float:
+    if not Configuration.IGNORE_OLD_ERRORS:
+        compiler_error_commits = storage.get_compiler_error_commits()
+        rev_list = [rev for rev in rev_list if rev not in compiler_error_commits]
+    return len([rev for rev in rev_list if rev in present_commits]) / max(1, len(rev_list))
+
+
+def build_tag_line(tag_times: dict[str, int], bucket_times: list[int]) -> str:
     tag_buckets = {
         tag: [
-            i for i in range(len(buckets)) 
+            i for i in range(len(bucket_times)) 
             if bucket_times[i] != -1 and bucket_times[i] <= tag_time
-            and (i == len(buckets) - 1 or bucket_times[i + 1] > tag_time)
+            and (i == len(bucket_times) - 1 or bucket_times[i + 1] > tag_time)
         ]
         for tag, tag_time in tag_times.items()
         if tag_time != -1
@@ -154,7 +149,7 @@ def print_compile_status(tags: list[str], rev_list: list[str], present_commits: 
         if len(i) > 0
     }
     tag_sorted = list(sorted(tag_buckets.keys()))
-    bucket_tags = [None] * len(buckets)
+    bucket_tags = [None] * len(bucket_times)
     for tag in tag_sorted[::-1]:
         bucket_tags[tag_buckets[tag]] = tag
     tag_output = ""
@@ -166,40 +161,68 @@ def print_compile_status(tags: list[str], rev_list: list[str], present_commits: 
             if tag_output_len != i:
                 tag_output += " "
                 tag_output_len += 1
-        elif tag_output_len + len(tag) + 1 < cols - 4:
+        elif tag_output_len + len(tag) + 1 < len(bucket_times):
             tag_output += terminal.color_rev(tag) + " "
             tag_output_len += len(tag) + 1
-    terminal.print_fit_line(tag_output, start=box_side, end=box_side)
-    print(box_side + " ", end="")
-    terminal.print_histogram_height(buckets)
-    print(" " + box_side)
-    print(box_side + " ", end="")
-    terminal.print_histogram_color(buckets)
-    print(" " + box_side)
-    bottom = terminal.box_bottom()
-    current_commit_time = git.get_commit_time(commits[current_i])
-    current_bucket = [
-        i for i in range(len(buckets)) 
-        if bucket_times[i] != -1 and bucket_times[i] <= current_commit_time
-        and (i == len(buckets) - 1 or bucket_times[i + 1] > current_commit_time)
+    return tag_output
+
+
+def print_histogram(cols: int, rev_list: list[str], tags: list[str], current_commit: str, present_commits: set[str]) -> Optional[int]:
+    tags = [tag for tag in tags if tag.find(".") == tag.rfind(".")]
+    tag_times = git.get_commit_times(tags)
+    tag_times = {
+        tag[:tag.find("-")]: tag_time
+        for tag, tag_time in tag_times.items()
+    }
+    ignored_commits = storage.get_ignored_commits()
+    rev_list = [rev for rev in rev_list if rev not in ignored_commits]
+    full_percent = get_fraction_completed(rev_list, present_commits) * 100
+    print(terminal.box_middle(title=f" Full Range Histogram ({full_percent:.1f}%)"))
+
+    split_revs = split_list(rev_list, cols - 4)
+    buckets = [
+        sum(1 for rev in split_revs[j] if rev in present_commits) / max(1, len(split_revs[j]))
+        for j in range(len(split_revs))
     ]
-    current_bucket = current_bucket[0] if len(current_bucket) > 0 else None
-    if current_bucket:
-        bottom = bottom[:current_bucket + 2] + terminal.color_key("^") + bottom[current_bucket + 3:]
-    print(bottom)
+    buckets += [0] * max(0, cols - 4 - len(buckets))
+    commit_times = git.get_commit_times(
+        [split_revs[i][0] for i in range(len(buckets)) if len(split_revs[i]) > 0]
+    )
+
+    if Configuration.SHOW_TAGS_ON_HISTOGRAM:
+        bucket_times = [
+            commit_times[split_revs[i][0]] if len(split_revs[i]) > 0 else -1
+            for i in range(len(buckets))
+        ]
+        tag_line = build_tag_line(tag_times, bucket_times)
+        print(terminal.box_fit(tag_line))
+
+    print(terminal.box_fit(terminal.histogram_height(buckets)))
+    print(terminal.box_fit(terminal.histogram_color(buckets)))
+
+    if Configuration.SHOW_TAGS_ON_HISTOGRAM:
+        current_commit_time = git.get_commit_time(current_commit)
+        possible_current_buckets = [
+            i for i in range(len(buckets)) 
+            if bucket_times[i] != -1 and bucket_times[i] <= current_commit_time
+            and (i == len(buckets) - 1 or bucket_times[i + 1] > current_commit_time)
+        ]
+    else:
+        possible_current_buckets = [i for i, revs in enumerate(split_revs) if current_commit in revs]
+    return possible_current_buckets[0] if len(possible_current_buckets) > 0 else None
 
 
 def compile(commits: list[str], should_compress: bool = True, n: int = 1, retry_compress: bool = False, fatal_compress: bool = False) -> bool:
     _handle_local_changes(True)
 
     present_commits = storage.get_present_commits()
-    rev_list = git.query_rev_list(Configuration.START_COMMIT, Configuration.TRACKED_BRANCH)
+    rev_list = git.query_rev_list(Configuration.RANGE_START, Configuration.RANGE_END)
     tags = git.get_tags()
 
-    start_time = time.time()
     times = {}
-    backoff = 1
+    successes = 0
     for i, commit in enumerate(commits):
+        start_time = time.time()
         if Configuration.PRINT_MODE == PrintMode.QUIET:
             print(f"Compiling commit {commit} ({i + 1} / {len(commits)})")
         else:
@@ -215,7 +238,6 @@ def compile(commits: list[str], should_compress: bool = True, n: int = 1, retry_
                 storage.add_compiler_error_commits([commit])
             print(f"Error while compiling commit {commit}. Skipping.")
             error_commits.add(commit)
-            start_time = time.time()
             continue
         cache(commit)
         present_commits.add(commit)
@@ -239,7 +261,6 @@ def compile(commits: list[str], should_compress: bool = True, n: int = 1, retry_
                 else:
                     print("WARNING: Compression failed, continuing compilation anyways.")
 
-        start_time = time.time()
         if signal_handler.SHOULD_EXIT:
             return True
 
@@ -247,7 +268,7 @@ def compile(commits: list[str], should_compress: bool = True, n: int = 1, retry_
 
 
 def compute_bundles(n: int, all: bool = False) -> list[list[str]]:
-    rev_list = git.query_rev_list(Configuration.START_COMMIT, Configuration.TRACKED_BRANCH)
+    rev_list = git.query_rev_list(Configuration.RANGE_START, Configuration.RANGE_END)
     compress_map = storage.read_compress_map()
     unbundled_versions = [rev for rev in rev_list if rev not in compress_map]
     ready_to_bundle = storage.get_unbundled_files()
@@ -295,7 +316,7 @@ def cache(current_commit: str = None) -> None:
     storage_path = os.path.join("versions", current_commit)
     shutil.move(compiled_path, storage_path)
     try:
-        os.chmod(storage_path, os.stat(storage_path).st_mode | os.stat.S_IXUSR | os.stat.S_IXGRP | os.stat.S_IXOTH)
+        os.chmod(storage_path, os.stat(storage_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except:
         pass
 
