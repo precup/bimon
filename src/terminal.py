@@ -2,27 +2,33 @@ import atexit
 import os
 import queue
 import re
-import readline
+import shutil
 import signal
 import subprocess
 import sys
 import threading
 import time
-
-if os.name != 'nt':
-    from ptyprocess import PtyProcessUnicode
 from typing import Optional
 
 import src.signal_handler as signal_handler
-
 from src.config import Configuration, PrintMode
 
+if os.name == 'nt':
+    from pyreadline3 import Readline
+    readline = Readline()
+    from src.winpty import PtyProcess
+else:
+    import readline
+    from ptyprocess import PtyProcessUnicode as PtyProcess
+
+ADD_TO_HISTORY = os.name == 'nt'
 DEFAULT_OUTPUT_WIDTH = 80
 HISTORY_FILE = "history"
 BAR_EIGHTHS = " ▏▎▍▌▋▊▉█"
 HEIGHT_EIGHTHS = " ▁▂▃▄▅▆▇█"
 ANSI_RESET = "\033[0m"
 ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+TELEPORT_RE = re.compile(r'\x1b\[\d+;(\d+)H')
 ANSI_COLOR_MAP = {
     "black": "0;30",
     "red": "0;91",
@@ -71,12 +77,69 @@ ANSI_BG_COLOR_MAP = {
 
 def init_terminal() -> None:
     if sys.stdin.isatty():
+        if os.name == "nt":
+            _windows_enable_ANSI(1)
+            _windows_enable_ANSI(2)
         try:
             readline.read_history_file(HISTORY_FILE)
         except FileNotFoundError:
             pass
         atexit.register(readline.write_history_file, HISTORY_FILE)
-        readline.set_auto_history(True)
+        if not ADD_TO_HISTORY:
+            readline.set_auto_history(True)
+
+
+# https://stackoverflow.com/questions/36760127/how-to-use-the-new-support-for-ansi-escape-sequences-in-the-windows-10-console
+def _windows_enable_ANSI(std_id):
+    """Enable Windows 10 cmd.exe ANSI VT Virtual Terminal Processing."""
+    from ctypes import byref, POINTER, windll, WINFUNCTYPE
+    from ctypes.wintypes import BOOL, DWORD, HANDLE
+
+    GetStdHandle = WINFUNCTYPE(
+        HANDLE,
+        DWORD)(('GetStdHandle', windll.kernel32))
+
+    GetFileType = WINFUNCTYPE(
+        DWORD,
+        HANDLE)(('GetFileType', windll.kernel32))
+
+    GetConsoleMode = WINFUNCTYPE(
+        BOOL,
+        HANDLE,
+        POINTER(DWORD))(('GetConsoleMode', windll.kernel32))
+
+    SetConsoleMode = WINFUNCTYPE(
+        BOOL,
+        HANDLE,
+        DWORD)(('SetConsoleMode', windll.kernel32))
+
+    if std_id == 1:       # stdout
+        h = GetStdHandle(-11)
+    elif std_id == 2:     # stderr
+        h = GetStdHandle(-12)
+    else:
+        return False
+
+    if h is None or h == HANDLE(-1):
+        return False
+
+    FILE_TYPE_CHAR = 0x0002
+    if (GetFileType(h) & 3) != FILE_TYPE_CHAR:
+        return False
+
+    mode = DWORD()
+    if not GetConsoleMode(h, byref(mode)):
+        return False
+
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+    if (mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING) == 0:
+        SetConsoleMode(h, mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+    return True
+
+
+def add_to_history(command: str) -> None:
+    if ADD_TO_HISTORY:
+        readline.add_history(command)
 
 
 def get_cols() -> int:
@@ -87,8 +150,7 @@ def get_cols() -> int:
 
 
 def _execute_in_subwindow_pty(command: list[str], title: str, rows: int, cwd: Optional[str], eat_kill: bool) -> bool:
-    print(f"Executing command in subwindow: {command}")
-    process = PtyProcessUnicode.spawn(command, cwd=cwd)
+    process = PtyProcess.spawn(command, cwd=cwd)
     cols = get_cols()
     output_lines = [""]
     lines_printed = 0
@@ -99,14 +161,17 @@ def _execute_in_subwindow_pty(command: list[str], title: str, rows: int, cwd: Op
     should_exit = False
     bottom = box_bottom(bold=False, title=signal_handler.MESSAGE if should_exit else "")
     rows -= 2
+    ansi_codes_seen = set()
 
     while process.isalive():
         try:
-            stdout_chunk = process.read(1024)
+            stdout_chunk = process.read(4)
             if stdout_chunk:
                 lines = stdout_chunk.split('\n')
                 output_lines[-1] += lines[0]
                 output_lines += lines[1:]
+            else:
+                time.sleep(0.1)
         except EOFError:
             break
         
@@ -137,91 +202,28 @@ def _execute_in_subwindow_pty(command: list[str], title: str, rows: int, cwd: Op
             "\033[2K" + "".join(ansi_stack) + line_text 
             for ansi_stack, line_text in window_lines
         )
+        ansi_codes_seen.update({match.group() for match in ANSI_ESCAPE.finditer(output)})
         output = ANSI_RESET + top + "\n" + output + ANSI_RESET + "\n" + bottom
         print(output)
 
     process.wait()
+    # print("Ansicodes seen:", ansi_codes_seen)
     if process.exitstatus != 0:
         print("Dumping full process log because an error occurred:")
         print("\n".join(output_lines))
     return process.exitstatus == 0
 
 
-def _execute_in_subwindow_nt(command: list[str], title: str, rows: int, cwd: Optional[str], eat_kill: bool) -> bool:
-    def enqueue_output(pipe, output_queue):
-        for line in iter(pipe.readline, ''):
-            output_queue.put(line)
-        pipe.close()
-
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        cwd=cwd,
-    )
-    stdout_queue = queue.Queue()
-    stderr_queue = queue.Queue()
-
-    stdout_thread = threading.Thread(target=enqueue_output, args=(process.stdout, stdout_queue))
-    stderr_thread = threading.Thread(target=enqueue_output, args=(process.stderr, stderr_queue))
-
-    stdout_thread.start()
-    stderr_thread.start()
-    output_lines = []
-    stderr_lines = []
-    lines_printed = 0
-    while True:
-        cols = get_cols()
-        try:
-            stdout_line = stdout_queue.get_nowait()
-            print(stdout_line)
-            # TODO handle ANSI escape sequences
-            output_lines += [line for _, line in split_to_display_lines(stdout_line, cols)]
-        except queue.Empty:
-            pass
-
-        try:
-            stderr_line = stderr_queue.get_nowait()
-            output_lines += [line for _, line in split_to_display_lines(stderr_line, cols)]
-            stderr_lines += [line for _, line in split_to_display_lines(stderr_line, cols)]
-        except queue.Empty:
-            pass
-
-        if process.poll() is not None and stdout_queue.empty() and stderr_queue.empty():
-            break
-
-        if lines_printed < rows:
-            while lines_printed < rows and lines_printed < len(output_lines):
-                # print(output_lines[lines_printed])
-                lines_printed += 1
-        else:
-            move_rows_up(rows)
-            output = "\n".join("\033[2K" + output_lines[-rows + i] for i in range(rows))
-            # print(output)
-        # print([repr(line) for line in output_lines])
-
-        time.sleep(0.05)
-
-    stdout_thread.join()
-    stderr_thread.join()
-    process.wait()
-    if len(stderr_lines) > 0:
-        print("Execution errors:")
-        print("\n".join(stderr_lines))
-    return process.returncode == 0
-
-
 def execute_in_subwindow(command: list[str], title: str, rows: int, cwd: Optional[str] = None, eat_kill: bool = False) -> bool:
     if cwd == "":
         cwd = None
+    if len(command) > 0 and not os.path.exists(command[0]):
+        path_locator = shutil.which(command[0])
+        if path_locator:
+            command[0] = path_locator
 
     if Configuration.PRINT_MODE == PrintMode.LIVE:
-        if os.name == 'nt':
-            return _execute_in_subwindow_nt(command, title, rows, cwd, eat_kill)
-        else:
-            return _execute_in_subwindow_pty(command, title, rows, cwd, eat_kill)
-        
+        return _execute_in_subwindow_pty(command, title, rows, cwd, eat_kill)
     elif Configuration.PRINT_MODE == PrintMode.QUIET:
         stdout = subprocess.DEVNULL
         stderr = subprocess.DEVNULL
@@ -231,6 +233,10 @@ def execute_in_subwindow(command: list[str], title: str, rows: int, cwd: Optiona
         stdout = sys.stdout
         stderr = sys.stderr
 
+    if len(command) > 0 and not os.path.exists(command[0]):
+        path_locator = shutil.which(command[0])
+        if path_locator:
+            command[0] = path_locator
     process = subprocess.Popen(
         command,
         stdout=stdout,
@@ -243,6 +249,10 @@ def execute_in_subwindow(command: list[str], title: str, rows: int, cwd: Optiona
 
 
 def split_to_display_lines(text: str, columns: int) -> list[tuple[list[str], str]]:
+    # TODO do I care about re.match(r"\x1b\[\d+C", line)
+    text = TELEPORT_RE.sub('\n', text)
+    text = text.replace("\x1b[2J", "\x1b[2K")
+    text = text.replace("\x1b[H", "\r")
     re_matches = ANSI_ESCAPE.finditer(text)
     matches = [(m.start(), m.end()) for m in re_matches]
     match_i = 0

@@ -1,7 +1,6 @@
 import configparser
 import os
 import sys
-
 from enum import Enum
 
 CONFIG_PATH = "config.ini"

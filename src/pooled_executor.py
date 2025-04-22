@@ -3,7 +3,6 @@ from queue import Queue
 from threading import Lock
 from typing import Callable, List, Tuple, Dict
 
-
 class PooledExecutor:
     def __init__(self, pool_size: int, task_fn: Callable, cleanup_fn: Callable = None) -> None:
         self.pool_size = pool_size

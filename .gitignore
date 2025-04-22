@@ -9,6 +9,8 @@ mold
 
 config.ini
 history
+compile_error_commits
+ignored_commits
 
 tmp
 

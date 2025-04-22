@@ -3,7 +3,6 @@
 import argparse
 import os
 import sys
-
 from typing import Optional
 
 import src.factory as factory
@@ -12,7 +11,6 @@ import src.mrp_manager as mrp_manager
 import src.signal_handler as signal_handler
 import src.storage as storage
 import src.terminal as terminal
-
 # TODO _ import??
 from src.bisect import BisectRunner, _launch_any
 from src.config import Configuration, PrintMode
@@ -206,11 +204,11 @@ def update(n: int, cursor_commit: Optional[str], update_range: str) -> None:
     start_commit, end_commit = update_range.split("..", 1)
     start_commit = git.resolve_ref(start_commit.strip())
     if start_commit == "":
-        print(f"Invalid range: start commit {update_range.split("..", 1)[0]} was not found.")
+        print(f"Invalid range: start commit {update_range.split('..', 1)[0]} was not found.")
         sys.exit(1)
     end_commit = git.resolve_ref(end_commit.strip())
     if end_commit == "":
-        print(f"Invalid range: end commit {update_range.split("..", 1)[1]} was not found.")
+        print(f"Invalid range: end commit {update_range.split('..', 1)[1]} was not found.")
         sys.exit(1)
 
     if cursor_commit is not None and len(cursor_commit) > 0:
@@ -367,7 +365,7 @@ def compress_command(n: Optional[int], all: bool) -> None:
 def exit_if_duplicate(item: Optional, item_internal: Optional, typename: str, who_knows: str, reason: str = "", commits: bool = True) -> None:
     if reason == "":
         reason = item_internal
-    prefix = f"project_or_issue{"_or_commit" if commits else ""} detected a{"n" if typename.startswith('i') else ""} {typename} '{who_knows}' passed to it"
+    prefix = f"project_or_issue{'_or_commit' if commits else ''} detected a{'n' if typename.startswith('i') else ''} {typename} '{who_knows}' passed to it"
     if item is not None:
         print(prefix + f", but --{typename} is already set.")
         sys.exit(1)

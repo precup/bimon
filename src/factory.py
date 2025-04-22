@@ -4,14 +4,12 @@ import shutil
 import sys
 import time
 import stat
-
 from typing import Optional
 
 import src.git as git
 import src.signal_handler as signal_handler
 import src.storage as storage
 import src.terminal as terminal
-
 from src.config import Configuration, PrintMode
 
 MIN_SUCCESSES = 3

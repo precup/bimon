@@ -3,7 +3,6 @@ import shlex
 import stat
 import sys
 import time
-
 from math import log2
 from pathlib import Path
 from typing import Optional, List, Set
@@ -13,7 +12,6 @@ import src.git as git
 import src.mrp_manager as mrp_manager
 import src.storage as storage
 import src.terminal as terminal
-
 from src.config import Configuration
 
 
@@ -580,6 +578,7 @@ class BisectRunner:
                 command = input("bisect> ").strip()
                 if command == "":
                     continue
+                terminal.add_history(command)
                 if not self.process_command(shlex.split(command)):
                     break
             except KeyboardInterrupt:

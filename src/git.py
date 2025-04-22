@@ -3,7 +3,6 @@ import shlex
 import subprocess
 
 import src.terminal as terminal
-
 from src.config import Configuration
 
 _commit_time_cache = {}

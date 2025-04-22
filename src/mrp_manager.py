@@ -4,7 +4,6 @@ import requests
 import shutil
 import sys
 import zipfile
-
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from typing import Optional
@@ -215,7 +214,7 @@ def get_mrp(issue: int) -> str:
     if len(zip_links) > 0:        
         print("Zip file(s) found in issue. Please select an option.")
         for i, link in enumerate(zip_links):
-            print(f"{i}{f" (in {"issue" if i < body_links_len else "comment"})" if len(zip_links) > body_links_len else ""}: {link}")
+            print(f"{i}" + (f" (in {'issue' if i < body_links_len else 'comment'})" if len(zip_links) > body_links_len else '') + f": {link}")
         print("c: Create a new blank project")
         choice = input("Enter the number of the zip file to download, or c to create a blank project: ").lower().strip()
 

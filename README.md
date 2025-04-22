@@ -111,45 +111,50 @@ src/mrp_manager.py:32:            sys.exit(1)
 src/mrp_manager.py:212:            sys.exit(1)
 bisect needs to handle its own error codes
 
-31 Functional
-  25 Major
+48 Functional
+  21 Major
   - 3 Hotkeys
-
   - 2 MacOS support
         Support storing folders instead of binaries
         Support running nested file
-  - 4 Add Windows execute_in_subwindow support
-
   - 4 Optimize decompression times, redo bundles to match
   - 4 Autoextract next possible commits in threads while bisecting
         get_next_commits needs updating
   - 8 zip mode
         conversion command
-  14 Minor
-  - 1 audit behavior for extremely small commit ranges (1 commit, etc)
-  - 2 use the commit range arguments everywhere
-        add initial range argument to bisect
-  - 1 defend against size 0 ranges
-  - 1 bisect error codes
-  - 1 bisect:320 no more commits to test (expand range?)
-  - 1 fix bugs with start_commit not being included in rev-lists
-  - 1 check that is_ancestor being false for self isn't a problem
-  - 1 startup check for range validity
-  - 1 keep track of a latest commit for repro instead of using the range?
-  - 1 check that I don't assume range_start and range_end are resolved
-  - 1 ctrl c jumps up by 1 and overwrites the bottom bar of the compiler output
-  - 1 progress bar clips onto next line, bland line before histogram line??
-  - 1 signal handler death message is incorrect for instadie modes
-  - 1 some inputs should allow enter for y probably
-  - 1 open the issue page on repro?
-  - 3 analyze a batch of issues
-  - 1 add issue number to project title
-  - 1 couldn't find that one MRP in the comments
-  - 1 fast way to upload mrp
-  - 1 cache before using so you don't have to reunpack on ctrl c
-
-Should more things fetch?
-allow pasting zip urls for projects?
+  27 Minor
+      Bugs
+      - 1 defend against size 0 ranges
+      - 1 audit behavior for extremely small commit ranges (1 commit, etc)
+      - 1 fix bugs with start_commit not being included in rev-lists
+      - 1 progress bar clips onto next line, blank line before histogram line??
+      - 1 ctrl c jumps up by 1 and overwrites the bottom bar of the compiler output
+      - 1 signal handler death message is incorrect for instadie modes
+      - 1 check that I don't assume range_start and range_end are resolved
+      - 1 couldn't find that one MRP in the comments
+      - 1 check that is_ancestor being false for self isn't a problem
+      Arguments
+      - 2 use the commit range arguments everywhere
+            add initial range argument to bisect
+      - 1 allow for ranges in commit lists
+      - 1 boolean arguments shouldn't require the positionals, really awkward
+      - 1 startup check for range validity
+      Input/Output
+      - 1 print link to the issue page on repro
+      - 1 add issue number to project title
+      - 1 some inputs should allow enter for y probably
+      - 1 fallback bar if no unicode and no color
+      - 1 color bar shouldn't show if color is disabled/not supported
+      - 1 non unicode support
+      - 1 256 color histogram support??
+      Misc
+      - 1 bisect error codes
+      - 1 cache before using so you don't have to reunpack on ctrl c
+      - 1 Should more things fetch?
+      --
+      - 1 bisect:320 no more commits to test (expand range?)
+      - 1 fast way to upload mrp
+      - 1 keep track of a latest commit for repro instead of using the range?
 
 10 Finishing touches
 - 1 Add anything else useful to the init command
@@ -161,9 +166,6 @@ allow pasting zip urls for projects?
 - 2 Better output, colors, text decorations?
 - 2 handle non live printmodes
 - 1 progress bar feels a bit cluttered
-- 1 boolean arguments shouldn't require the positionals, really awkward
-- 1 allow for ranges in commit lists
-- 1 get rid of warning on projects opened for the first time
 
 Clean up
 - Code clean up pass
@@ -178,6 +180,9 @@ Testing
 - Check which arguments are required and which aren't
 - Non LLVM build outputs
 - Windows
+      Needed to manually install pyreadline3, pywinpty
+      can't scroll while subcommand is printing
+      unicode support is garbage
 
 Documentation
 - Write README.md
@@ -189,8 +194,10 @@ Documentation
 Someday?
 - Terminal window resizing support
 - Find commits mentioned in the issue
-- Fullscreen update mode
+- Fullscreen update mode?
 - SIGINT doesn't print if triggered in the middle of another print
 - path spec should allow you to test commits outside that set if that's the only precompiled
 - Corrupted binaries aren't handled at all
     Does killing the extraction threads litter the version space?
+- Non interactive bisect mode
+- Make more general so this isn't just a godot specific tool

@@ -212,7 +212,7 @@ def get_compiler_error_commits() -> set[str]:
         result = set()
         for line in f.readlines():
             if len(line.strip()) > 0:
-                result += set(line.strip().split())
+                result.update(set(line.strip().split()))
         return result
 
 
