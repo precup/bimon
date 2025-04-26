@@ -1,14 +1,80 @@
 import functools
+import os
 import shlex
 import subprocess
+from collections import deque
+import heapq
 
 import src.terminal as terminal
 from src.config import Configuration
 
+CACHE_NAME = "git_cache"
+PRECACHE_NAME = "git_precache"
+
 _commit_time_cache = {}
+_diff_cache = {}
+_diff_precache = {}
 
 
-def clone(repository: str, target: str) -> None:
+def load_cache() -> None:
+    global _commit_time_cache
+    try:
+        with open(CACHE_NAME, "r") as cache_file:
+            for line in cache_file:
+                if line.startswith("#"):
+                    continue
+                parts = line.strip().split()
+                if len(parts) == 2:
+                    _commit_time_cache[parts[0]] = int(parts[1])
+    except FileNotFoundError:
+        pass
+
+
+def add_to_cache(diff_results: dict[tuple[str, str], int]) -> None:
+    pass
+
+
+def add_to_precache(commit_pairs: list[tuple[str, str]]) -> None:
+    pass
+
+
+def get_similar_commit(target_commit: str, all_commits: list[str], possible_commits: set[str]) -> str:
+    # TODO can this get_parents call be batched?
+    neighbors = {
+        commit: get_parents(commit) for commit in all_commits
+    }
+    for commit in neighbors:
+        to_remove = set()
+        for neighbor in neighbors[commit]:
+            if neighbor in neighbors:
+                neighbors[neighbor].add(commit)
+            else:
+                to_remove.add(neighbor)
+        neighbors[commit] -= to_remove
+
+    queue = []
+    heapq.heappush(queue, (0, target_commit))
+    seen = set()
+    best = None
+    best_diff = -1
+    while queue:
+        total, curr = heapq.heappop(queue)
+        seen.add(curr)
+        if curr in possible_commits:
+            if best is None or total < best_diff:
+                best_diff = total
+                best = curr
+            continue
+        if best is not None and total > best_diff:
+            continue
+        for neighbor in neighbors[curr]:
+            if neighbor not in seen:
+                diff = get_diff(curr, neighbor)
+                heapq.heappush(queue, (total + diff, neighbor))
+    return best
+
+
+def clone(repository: str, target: str) -> bool:
     try:
         os.system(f"git clone {repository} {target}")
         return True
@@ -22,6 +88,7 @@ def check_out(rev: str) -> None:
 
 def fetch() -> None:
     get_git_output(["fetch", "--tags", "--prune", "origin"])
+    cache_clear()
 
 
 def get_git_output(args: list[str]) -> str:
@@ -67,7 +134,7 @@ def get_short_name(commit: str) -> str:
     resolved = resolve_ref(commit)
     if len(resolved) == 0:
         return terminal.color_bad(commit)
-    short_name = get_git_output(["log", f'--pretty=format:"%h"', commit, "-n", "1", "--abbrev-commit"])
+    short_name = get_git_output(["log", '--pretty=format:"%h"', commit, "-n", "1", "--abbrev-commit"])
     return terminal.color_rev(short_name)
 
 
@@ -76,18 +143,18 @@ def get_plain_short_name(commit: str) -> str:
     resolved = resolve_ref(commit)
     if len(resolved) == 0:
         return commit
-    return get_git_output(["log", f'--pretty=format:"%h"', commit, "-n", "1", "--abbrev-commit"])
+    return get_git_output(["log", '--pretty=format:"%h"', commit, "-n", "1", "--abbrev-commit"])
 
 
 @functools.lru_cache
 def get_short_log(commit: str) -> str:
-    commit_msg = get_git_output(["log", f'--pretty=format:"%s"', commit, "-n", "1", "--abbrev-commit"])
+    commit_msg = get_git_output(["log", '--pretty=format:"%s"', commit, "-n", "1", "--abbrev-commit"])
     return get_short_name(commit) + " " + commit_msg
 
 
 @functools.lru_cache(maxsize=None)
 def resolve_ref(ref: str) -> str:
-    return get_git_output(["rev-parse", "--revs-only", ref])
+    return get_git_output(["rev-parse", "--revs-only", ref.strip()]).strip()
 
 
 def query_rev_list(start_ref: str, end_ref: str, path_spec: str = "", before: int = -1) -> list[str]:
@@ -100,9 +167,15 @@ def _query_rev_list(start_ref: str, end_ref: str, path_spec: str = "", before: i
     if before >= 0:
         command += [f"--before={before}"]
     if path_spec:
-        command += [f"--"] + shlex.split(path_spec)
+        command += ["--"] + shlex.split(path_spec)
     output = get_git_output(command)
-    return [k.strip() for k in output.split() if k.strip() != ""]
+    rev_list = [k.strip() for k in output.split() if k.strip() != ""]
+    if len(rev_list) > 0:
+        resolved_start_ref = resolve_ref(start_ref)
+        resolved_end_ref = resolve_ref(end_ref)
+        if resolved_start_ref != resolved_end_ref:
+            rev_list.insert(0, resolved_start_ref)
+    return rev_list
 
 
 def get_bisect_commits(good_commits: set[str], bad_commits: set[str], path_spec: str = "", before: int = -1) -> list[str]:
@@ -110,7 +183,7 @@ def get_bisect_commits(good_commits: set[str], bad_commits: set[str], path_spec:
     if before >= 0:
         command += [f"--before={before}"]
     if path_spec:
-        command += [f"--"] + shlex.split(path_spec)
+        command += ["--"] + shlex.split(path_spec)
     output = get_git_output(command)
     return [line.strip().split()[0].strip() for line in output.splitlines() if len(line.strip()) > 0]
 
@@ -134,3 +207,35 @@ def get_tags() -> list[str]:
 
 def is_ancestor(possible_ancestor: str, commit: str) -> bool:
     return len(query_rev_list(possible_ancestor, commit)) > 0
+
+
+def get_parents(commit: str) -> set[str]:
+    output = get_git_output(["log", "--pretty=format:%P", commit, "-n", "1"])
+    return {line.strip() for line in output.split() if len(line.strip()) > 0}
+
+
+def get_diff_size(commit_src: str, commit_dst: str) -> int:
+    output = get_git_output(["diff", "--shortstat", commit_src, commit_dst])
+    if len(output) == 0:
+        return 0
+    try:
+        output_parts = output.split()
+        if len(output_parts) < 4:
+            print("bad parts", output_parts)
+            return 0
+        retval = int(output_parts[3])
+        if len(output_parts) >= 6:
+            retval = max(retval, int(output_parts[5]))
+        return retval
+    except ValueError:
+        return 0
+
+
+def cache_clear() -> None:
+    global _commit_time_cache
+    _commit_time_cache = {}
+    _query_rev_list.cache_clear()
+    get_short_name.cache_clear()
+    get_plain_short_name.cache_clear()
+    get_short_log.cache_clear()
+    resolve_ref.cache_clear()

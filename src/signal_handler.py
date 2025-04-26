@@ -5,12 +5,13 @@ SHOULD_EXIT = False
 SHOULD_PRINT = True
 SHOULD_INSTADIE = True
 MESSAGE = "Interrupt received, exiting after this step. Send another to exit now."
+SECOND_MESSAGE = "Second interrupt received, exiting immediately..."
 
 
 def _signal_handler(__sig, __frame) -> None:
     global SHOULD_EXIT
     if SHOULD_EXIT or SHOULD_INSTADIE:
-        _thread_print("Second interrupt received, exiting immediately...")
+        _thread_print(MESSAGE if SHOULD_INSTADIE else SECOND_MESSAGE)
         sys.exit(1)
     SHOULD_EXIT = True
     if SHOULD_PRINT:

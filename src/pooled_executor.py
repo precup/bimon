@@ -1,20 +1,20 @@
 from concurrent.futures import ThreadPoolExecutor, Future
 from queue import Queue
 from threading import Lock
-from typing import Callable, List, Tuple, Dict
+from typing import Callable
 
 class PooledExecutor:
     def __init__(self, pool_size: int, task_fn: Callable, cleanup_fn: Callable = None) -> None:
         self.pool_size = pool_size
         self.executor = ThreadPoolExecutor(max_workers=pool_size)
         self.task_queue = Queue()
-        self.running_tasks: Dict[str, Future] = {}
+        self.running_tasks: dict[str, Future] = {}
         self.lock = Lock()
         self.task_fn = task_fn
         self.cleanup_fn = cleanup_fn
 
 
-    def enqueue_tasks(self, tasks: List[Tuple[str, Tuple]]) -> None:
+    def enqueue_tasks(self, tasks: list[list[str, list]]) -> None:
         with self.lock:
             new_keys = {key for key, _ in tasks}
 
@@ -39,7 +39,7 @@ class PooledExecutor:
             self._process_queue()
 
 
-    def enqueue_and_wait(self, tasks: List[Tuple[str, Tuple]]) -> None:
+    def enqueue_and_wait(self, tasks: list[list[str, list]]) -> None:
         self.enqueue_tasks(tasks)
         self.task_queue.join()
 
@@ -48,12 +48,12 @@ class PooledExecutor:
         while not self.task_queue.empty():
             key, args = self.task_queue.get()
             if key not in self.running_tasks:
-                self.running_tasks[key] = future
                 future = self.executor.submit(self._run_task, key, args)
                 future.args = args
+                self.running_tasks[key] = future
 
 
-    def _run_task(self, key: str, args: Tuple) -> None:
+    def _run_task(self, key: str, args: list) -> None:
         try:
             self.task_fn(*args)
         finally:

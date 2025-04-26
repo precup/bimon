@@ -3,6 +3,7 @@ import os
 import shutil
 import stat
 import tarfile
+import zipfile
 
 from pathlib import Path
 
@@ -27,6 +28,7 @@ def init_storage() -> None:
 
 
 def init_decompress_queue() -> None:
+    global _use_decompress_queue, _decompress_queue
     if not _use_decompress_queue:
         _decompress_queue = PooledExecutor(
             task_fn=_extract_commit, pool_size=2
@@ -104,7 +106,7 @@ def _extract_commit(commit: str, target: str = "") -> bool:
     except tarfile.TarError as e:
         print(f"Extraction failed during decompression with error {e}.")
         return False
-    except KeyError as e:
+    except KeyError:
         print("Falling back to old decompression method.")
         # TODO remove this once I've cleaned up old bundles
         # TODO test whether this can be made faster
@@ -143,7 +145,141 @@ def purge_duplicate_files(protected_commits: set[str]) -> int:
     return purge_count
 
 
-def compress_with_lzma(bundle_path: str, file_paths: list[str]) -> None:
+def duse_actual_tar() -> None:
+    target_file = "099b9b2e85b0749cf5de546dbdc40975238a7c3d"
+    for filepath in os.listdir("tmp"):
+        if 'godot' in filepath:
+            continue
+        if os.path.exists(target_file):
+            if os.path.isdir(target_file):
+                shutil.rmtree(target_file)
+            else:
+                os.remove(target_file)
+        if filepath.startswith("bundle_") and filepath.endswith(".tar.gz") and "items" in filepath:
+            start_time = time.time()
+            os.system(f"tar -xf {filepath} {target_file}")
+            print(f"Extraction took {time.time() - start_time:.2f} seconds.")
+
+
+def time_bundles() -> None:
+    target_file = "099b9b2e85b0749cf5de546dbdc40975238a7c3d"
+    for filepath in os.listdir("."):
+        if os.path.isdir(target_file):
+            shutil.rmtree(target_file)
+        else:
+            os.remove(target_file)
+        if filepath.startswith("bundle_") and filepath.endswith(".zpaq") and "items" in filepath:
+            start_time = time.time()
+            os.system(f"zpaq x {tarname} -only {" ".join(k[:i])}")
+            print(f"Extraction took {time.time() - start_time:.2f} seconds.")
+
+
+def test_bundles() -> None:
+    for i in range(1, 1 + len(k)):
+        for compress_level in range(0, 6):
+            tarname = f"bundle_{i}_items_zpaq{compress_level}.zpaq"
+            start_time = time.time()
+            os.system(f"zpaq a {tarname} {" ".join(k[:i])} -method {compress_level}")
+            print(f"Bundle {i} c{compress_level}: {os.path.getsize(tarname) / i / 1000000:.1f}, {time.time() - start_time:.2f} seconds.")
+
+
+def test_system_lzma() -> None:
+    options = "dict=256MiB,mode=fast,mf=hc4"
+    start_time = time.time()
+    tarname = "bundle_32.system.tar.xz"
+    versions = 14
+    if os.path.exists(tarname):
+        os.remove(tarname)
+    command = f"xz --lzma2={options} -z -c bundle_olds.tar > {tarname}"
+    os.system(command)
+    print(f"System LZMA: {os.path.getsize(tarname) / versions / 1000000:.1f} {time.time() - start_time:.2f} seconds.")
+
+
+import tarfile
+from pyzstd import CParameter, ZstdFile
+
+
+class ZstdTarFile(tarfile.TarFile):
+    BASE_OPTIONS = {
+        CParameter.compressionLevel: 1,
+        CParameter.nbWorkers: 0,
+        CParameter.windowLog: 30,
+        CParameter.strategy: 8,
+        CParameter.chainLog: 6,
+        CParameter.minMatch: 3,
+        CParameter.targetLength: 16,
+        CParameter.enableLongDistanceMatching: 1,
+        CParameter.ldmHashLog: 27,
+        CParameter.ldmMinMatch: 4,
+        CParameter.ldmHashRateLog: 4,
+        CParameter.ldmBucketSizeLog: 1,
+    }
+    def __init__(self, name, mode='r', **kwargs):
+        self.zstd_file = pyzstd.ZstdFile(name, mode, level_or_option=BASE_OPTIONS)
+        try:
+            super().__init__(fileobj=self.zstd_file, mode=mode, **kwargs)
+        except:
+            self.zstd_file.close()
+            raise
+
+    def close(self):
+        try:
+            super().close()
+        finally:
+            self.zstd_file.close()
+
+
+def compress_with_zstd(bundle_path: str, output_path: str, **kwarg) -> None:
+    compressor = pyzstd.ZstdCompressor(level_or_option=option_dict)
+    if os.path.exists(output_path):
+        os.remove(output_path)
+    with open(bundle_path, "rb") as f_in, open(output_path, "wb") as f_out:
+        f_out.write(compressor.compress(f_in.read()))
+    print(f"size {os.path.getsize(output_path) / 1e6 :.1f} MB")
+
+
+def compress_with_zstd2(bundle_path: str, output_path: str, **kwargs) -> None:
+    import zstandard as zstd
+    compression_options = {
+        "strategy": 8,
+        "window_log": 30,
+        "chain_log": 6,
+        "min_match": 3,
+        "target_length": 16,
+        "enable_ldm": True,
+        "ldm_hash_log": 27,
+        "ldm_min_match": 4,
+        "ldm_hash_rate_log": 4,
+        "ldm_bucket_size_log": 1,
+    }
+    compression_options.update(kwargs)
+    compression_level = kwargs.pop("compression_level", 1)
+    params = zstd.ZstdCompressionParameters.from_level(compression_level, **compression_options)
+    compressor = zstd.ZstdCompressor(compression_params=params)
+    if os.path.exists(output_path):
+        os.remove(output_path)
+    with open(bundle_path, "rb") as f_in, open(output_path, "wb") as f_out:
+        f_out.write(compressor.compress(f_in.read()))
+    print(f"size {os.path.getsize(output_path) / 1e6 :.1f} MB")
+
+
+def tes(bundle,suffix, **kwargs) -> None:
+    start_time = time.time()
+    compress_with_zstd(f'tmp2/bundle_{bundle}.tar', f'tmp2/bundle_{bundle}_{suffix}.tar.zst', **kwargs)
+    print(f"Time: {time.time() - start_time:.2f} seconds.")
+
+
+def test_zstd(suffix) -> None:
+    for i in ['3', '13', 'olds', '20_same']:
+        compress_with_zstd(f'tmp2/bundle_{i}.tar', f'tmp2/bundle_{i}_{suffix}.tar.zst')
+
+
+def test_lzma(suffix) -> None:
+    for i in ['3', '13', 'olds', '20_same']:
+        compress_with_lzma(f'tmp2/bundle_{i}.tar.xz', [f'tmp2/bundle_{i}.tar'])
+
+
+def compress_with_lzma(bundle_path: str, file_paths: list[str], filters: dict = {}) -> None:
     # Configure custom LZMA filters to take advantage of large overlaps
     lzma_filters = [
         {
@@ -153,13 +289,65 @@ def compress_with_lzma(bundle_path: str, file_paths: list[str]) -> None:
             "mf": lzma.MF_HC4,
         }
     ]
-
+    for key, value in filters.items():
+        lzma_filters[0][key] = value
     with open(bundle_path, "wb") as f:
         with lzma.open(f, mode="w", format=lzma.FORMAT_XZ, filters=lzma_filters) as lzma_file:
             with tarfile.open(fileobj=lzma_file, mode="w") as tar:
                 for file_path in file_paths:
                     if os.path.exists(file_path):
                         tar.add(file_path, arcname=os.path.basename(file_path))
+
+
+def time_extractions() -> None:
+    for file in os.listdir("."):
+        if file.startswith("bundle"):
+            start_time = time.time()
+            target_dir = os.path.join(".", file[:-4 if file.endswith(".zip") else len(file)])
+            if os.path.exists(target_dir):
+                shutil.rmtree(target_dir)
+            os.mkdir(target_dir)
+            print(file[6:-4 if file.endswith(".zip") else len(file)] + ":", end=" ")
+            extract_from_zip(os.path.join(".", file), target_dir)
+
+
+def extract_from_zip(bundle_path: str, target: str) -> None:
+    start_time = time.time()
+    with zipfile.ZipFile(bundle_path, mode="r") as zipf:
+        for file in zipf.namelist():
+            if file.endswith(".tar.xz"):
+                zipf.extract(file, target)
+                extracted_file = os.path.join(target, file)
+                with tarfile.open(extracted_file, mode="r:xz") as tar:
+                    tar.extractall(path=target)
+                os.remove(extracted_file)
+            else:
+                zipf.extract(file, target)
+    print(f"Extraction took {time.time() - start_time:.2f} seconds.")
+
+
+
+def compress_with_zip(bundle_path: str, file_paths: list[str]) -> None:
+    start_time = time.time()
+    with zipfile.ZipFile(bundle_path + ".lzma.zip", mode="w", compression=zipfile.ZIP_LZMA) as zipf:
+        for file_path in file_paths:
+            if os.path.exists(file_path):
+                zipf.write(file_path, arcname=os.path.basename(file_path))
+    print(f"LZMA compression took {time.time() - start_time:.2f} seconds.")
+    for i in range(1, 10):
+        start_time = time.time()
+        with zipfile.ZipFile(bundle_path + f".deflated{i}.zip", mode="w", compresslevel=i, compression=zipfile.ZIP_DEFLATED) as zipf:
+            for file_path in file_paths:
+                if os.path.exists(file_path):
+                    zipf.write(file_path, arcname=os.path.basename(file_path))
+        print(f"DEFLATED compression (level {i}) took {time.time() - start_time:.2f} seconds.")
+    for i in range(1, 10):
+        start_time = time.time()
+        with zipfile.ZipFile(bundle_path + f".bz{i}.zip", mode="w", compresslevel=i, compression=zipfile.ZIP_BZIP2) as zipf:
+            for file_path in file_paths:
+                if os.path.exists(file_path):
+                    zipf.write(file_path, arcname=os.path.basename(file_path))
+        print(f"BZIP2 compression (level {i}) took {time.time() - start_time:.2f} seconds.")
 
 
 def compress_bundle(bundle_id: str, bundle: list[str]) -> bool:

@@ -1,14 +1,16 @@
 import os
 import re
-import requests
 import shutil
 import sys
 import zipfile
-from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
-from typing import Optional
 
-ISSUES_URL = "github.com/godotengine/godot/issues/"
+import requests
+from bs4 import BeautifulSoup
+
+from src.config import Configuration, PrintMode
+
+ISSUES_URL = "https://github.com/godotengine/godot/issues/"
 MRP_FOLDER = "mrps"
 UNZIP_FOLDER = os.path.join("mrps", "unzip")
 
@@ -40,8 +42,8 @@ def get_issue_number(project: str) -> int:
 def get_approx_issue_creation_time(issue: int) -> int:
     # Can't easily get the actual time, just a date, so we actually just
     # return the timestamp a couple days after that to avoid any timezone issues
-    url = f"https://{ISSUES_URL}{issue}"
-    response = requests.get(url)
+    url = ISSUES_URL + str(issue)
+    response = requests.get(url, timeout=60)
     soup = BeautifulSoup(response.content, 'html.parser')
     body_divs = soup.find_all('div', class_=re.compile('.*issue-body.*'))
     for div in body_divs:
@@ -90,7 +92,7 @@ def extract_mrp(zip_filename: str, issue_number: int) -> str:
 
     if os.path.exists(issue_mrp_folder):
         if issue_number < 0:
-            print(f"Sandbox folder already exists. Overwriting.")
+            print("Sandbox folder already exists. Overwriting.")
         else:
             print(f"MRP folder for issue {issue_number} already exists. Overwriting.")
         shutil.rmtree(issue_mrp_folder)
@@ -103,7 +105,53 @@ def extract_mrp(zip_filename: str, issue_number: int) -> str:
     if not project_file:
         print("MRP extraction failed, project.godot file not found in the extracted folder.")
         return ""
+    update_project_title(project_file, issue_number)
     return project_file
+
+
+def update_project_title(project_file: str, issue_number: int) -> None:
+    if Configuration.ADD_ISSUE_TO_TITLE and issue_number >= 0:
+        with open(project_file, 'r') as f:
+            lines = f.readlines()
+        title_line_index = -1
+        application_line_index = -1
+        version_line_index = -1
+        needs_update = False
+        for i, line in enumerate(lines):
+            if line.startswith("config/name="):
+                title_line_index = i
+            if line.startswith("config_version="):
+                version_line_index = i
+            if "[application]" in line:
+                application_line_index = i
+        if version_line_index == -1:
+            lines.insert(0, "config_version=5\n")
+            needs_update = True
+            version_line_index = 0
+            if title_line_index != -1:
+                title_line_index += 1
+            if application_line_index != -1:
+                application_line_index += 1
+        if application_line_index == -1:
+            application_line_index = len(lines)
+            lines.append("[application]\n")
+            needs_update = True
+        if title_line_index == -1:
+            title_line_index = application_line_index + 1
+            lines.insert(title_line_index, f"config/name=Issue #{issue_number} MRP\n")
+            needs_update = True
+        if str(issue_number) not in lines[title_line_index]:
+            line_parts = lines[title_line_index].split("=", 1)
+            line_parts[1] = f"[{issue_number}] " + line_parts[1]
+            lines[title_line_index] = "=".join(line_parts)
+            needs_update = True
+
+        if needs_update:
+            with open(project_file, 'w') as f:
+                for line in lines:
+                    if line.startswith("title="):
+                        line = f"title=MRP #{issue_number}\n"
+                    f.write(line)
 
 
 def find_project_file(folder: str, silent: bool = False) -> str:
@@ -122,13 +170,13 @@ def find_project_file(folder: str, silent: bool = False) -> str:
         print("Multiple project.godot files found in the extracted folder. Please specify which one to use.")
         for i, file in enumerate(project_files):
             print(f"{i}: {file[file.index(UNZIP_FOLDER) + len(UNZIP_FOLDER):]}")
-        choice = input("Enter the number of the project.godot file to use, or n if none look right: ").lower().strip()
+        choice = input("Enter the number of the project.godot file to use, or n if none look right: ").strip().lower()
         while True:
             if choice.startswith('n'):
                 return ""
             if choice.isdigit() and int(choice) < len(project_files):
                 break
-            choice = input("Invalid choice. Please enter a valid number or 'n': ")
+            choice = input("Invalid choice. Please enter a valid number or 'n': ").strip().lower()
         return project_files[int(choice)]
     elif len(project_files) == 1:
         return project_files[0]
@@ -142,23 +190,24 @@ def create_mrp(issue_number: int = -1) -> str:
     if os.path.exists(folder_name):
         project_file = find_project_file(folder_name, True)
         if issue_number < 0 and project_file != "":
-            print(f"A temporary sandbox project already exists.")
-            response = inputs("Would you like to use it? (y/n): ")
-            if response.lower().startswith("y"):
+            print("A temporary sandbox project already exists.")
+            response = input("Would you like to use it? [Y/n]: ").strip().lower()
+            if not response.startswith("n"):
                 return find_project_file(folder_name)
-            print(f"Overwriting it with a new one.")
+            print("Overwriting it with a new one.")
         shutil.rmtree(folder_name)
     os.mkdir(folder_name)
 
     project_file = os.path.join(folder_name, "project.godot")
     with open(project_file, 'a'):
         os.utime(project_file, None)
+    update_project_title(project_file, issue_number)
     return project_file
 
 
-def get_zip_links_from_issue(issue: int) -> (list[str], int):
-    url = f"https://{ISSUES_URL}{issue}"
-    response = requests.get(url)
+def get_zip_links_from_issue(issue: int) -> tuple[list[str], int]:
+    url = ISSUES_URL + str(issue)
+    response = requests.get(url, timeout=60)
     soup = BeautifulSoup(response.content, 'html.parser')
     zip_links = list()
 
@@ -180,7 +229,7 @@ def download_zip(zip_link: str, filename: str) -> bool:
     print(f"Downloading zip file from {zip_link}")
 
     try:
-        response = requests.get(zip_link)
+        response = requests.get(zip_link, timeout=60)
         with open(filename, 'wb') as f:
             f.write(response.content)
     except requests.exceptions.RequestException as e:
@@ -194,18 +243,18 @@ def download_zip(zip_link: str, filename: str) -> bool:
 def get_mrp(issue: int) -> str:
     if issue == -1:
         print("Execution parameters request a {PROJECT} but no project or issue was provided.")
-        response = input("Would you like to use a temporary sandbox project? (y)/n: ")
-        if response.lower().startswith("y") or response == "":
-            return create_mrp()
-        else:
+        response = input("Would you like to use a temporary sandbox project? [Y/n]: ").strip().lower()
+        if response.startswith("n"):
             return ""
+        else:
+            return create_mrp()
 
     folder_name = os.path.join(MRP_FOLDER, f"{issue}")
     zip_filename = os.path.join(MRP_FOLDER, f"{issue}.zip")
     if os.path.exists(folder_name) or os.path.exists(zip_filename):
         print(f"Previously used MRP found for issue {issue}.")
-        response = input("Would you like to use it? (y)/n: ")
-        if response.lower().startswith("y") or response == "":
+        response = input("Would you like to use it? [Y/n]: ").strip().lower()
+        if not response.startswith("n"):
             return find_project_file(folder_name) if os.path.exists(folder_name) else zip_filename
             
     print("Attempting to find projects in the issue.")
@@ -216,20 +265,20 @@ def get_mrp(issue: int) -> str:
         for i, link in enumerate(zip_links):
             print(f"{i}" + (f" (in {'issue' if i < body_links_len else 'comment'})" if len(zip_links) > body_links_len else '') + f": {link}")
         print("c: Create a new blank project")
-        choice = input("Enter the number of the zip file to download, or c to create a blank project: ").lower().strip()
+        choice = input("Enter the number of the zip file to download, or c to create a blank project: ").strip().lower()
 
         while True:
             if choice.startswith('c') or (choice.isdigit() and int(choice) < len(zip_links)):
                 break
-            choice = input("Invalid choice. Please enter a valid number or 'c': ")
+            choice = input("Invalid choice. Please enter a valid number or 'c': ").strip().lower()
 
         if not choice.startswith('c'):
             zip_link = zip_links[int(choice)]
             return zip_filename if download_zip(zip_link, zip_filename) else ""
     else:
         print(f"No MRP found in issue #{issue}.")
-        response = input("Would you like to create a blank project to use? (y)/n: ")
-        if len(response) > 0 and response[0].lower() not in ["y", "c"]:
+        response = input("Would you like to create a blank project to use? [Y/n]: ").strip().lower()
+        if response.startswith("n"):
             return ""
 
     return create_mrp(issue)

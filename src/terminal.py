@@ -1,12 +1,10 @@
 import atexit
 import os
-import queue
 import re
 import shutil
 import signal
 import subprocess
 import sys
-import threading
 import time
 from typing import Optional
 
@@ -24,8 +22,11 @@ else:
 ADD_TO_HISTORY = os.name == 'nt'
 DEFAULT_OUTPUT_WIDTH = 80
 HISTORY_FILE = "history"
-BAR_EIGHTHS = " ▏▎▍▌▋▊▉█"
+UNICODE_BAR_PARTS = " ▏▎▍▌▋▊▉█"
+C437_BAR_PARTS = " ▌█"
 HEIGHT_EIGHTHS = " ▁▂▃▄▅▆▇█"
+UNICODE_HEIGHT_PARTS = " ▁▂▃▄▅▆▇█"
+C437_HEIGHT_PARTS = " ░▒▓█"
 ANSI_RESET = "\033[0m"
 ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 TELEPORT_RE = re.compile(r'\x1b\[\d+;(\d+)H')
@@ -87,6 +88,12 @@ def init_terminal() -> None:
         atexit.register(readline.write_history_file, HISTORY_FILE)
         if not ADD_TO_HISTORY:
             readline.set_auto_history(True)
+
+
+def set_command_completer(completer: callable) -> None:
+    readline.set_completer(completer)
+    readline.parse_and_bind("tab: complete")
+    readline.parse_and_bind("set show-all-if-ambiguous on")
 
 
 # https://stackoverflow.com/questions/36760127/how-to-use-the-new-support-for-ansi-escape-sequences-in-the-windows-10-console
@@ -191,7 +198,7 @@ def _execute_in_subwindow_pty(command: list[str], title: str, rows: int, cwd: Op
             else:
                 should_exit = signal_handler.SHOULD_EXIT
                 bottom = box_bottom(bold=False, title=signal_handler.MESSAGE)
-                for i in range(2):
+                for _ in range(2):
                     clear_line()
                     move_rows_up(1)
                 clear_line()
@@ -249,6 +256,8 @@ def execute_in_subwindow(command: list[str], title: str, rows: int, cwd: Optiona
 
 
 def split_to_display_lines(text: str, columns: int) -> list[tuple[list[str], str]]:
+    if text == "":
+        return [([], "")]
     # TODO do I care about re.match(r"\x1b\[\d+C", line)
     text = TELEPORT_RE.sub('\n', text)
     text = text.replace("\x1b[2J", "\x1b[2K")
@@ -261,8 +270,8 @@ def split_to_display_lines(text: str, columns: int) -> list[tuple[list[str], str
 
     current_line = ""
     current_line_length = 0
-    for i in range(len(text)):
-        current_line += text[i]
+    for i, c in enumerate(text):
+        current_line += c
 
         while match_i < len(matches) and i >= matches[match_i][1]:
             match_i += 1
@@ -270,9 +279,9 @@ def split_to_display_lines(text: str, columns: int) -> list[tuple[list[str], str
             continue
 
         current_line_length += 1
-        if text[i] == '\r':
+        if c == '\r':
             current_line_length = 0
-        elif text[i] == "\n" or current_line_length > columns:
+        elif c == "\n" or current_line_length > columns:
             lines.append((list(ansi_stack), current_line[:-1]))
             current_line = current_line[-1:]
             if current_line == "\n":
@@ -290,8 +299,8 @@ def trim_str(text: str, columns: int) -> str:
     match_i = 0
     current_line = ""
     current_line_length = 0
-    for i in range(len(text)):
-        current_line += text[i]
+    for i, c in enumerate(text):
+        current_line += c
 
         while match_i < len(matches) and i >= matches[match_i][1]:
             match_i += 1
@@ -299,9 +308,9 @@ def trim_str(text: str, columns: int) -> str:
             continue
 
         current_line_length += 1
-        if text[i] == '\r':
+        if c == '\r':
             current_line_length = 0
-        if text[i] == "\n" or current_line_length > columns:
+        if c == "\n" or current_line_length > columns:
             current_line = current_line[:-1]
             break
     return current_line + (ANSI_RESET if len(matches) > 0 else "")
@@ -366,20 +375,24 @@ def escape_len(text: str) -> int:
 def progress_bar(cols: int, fraction: float) -> str:
     fraction = max(min(1, fraction), 0)
     start_chars = int(cols * fraction)
-    center_eighths = int(cols * fraction * 8) % 8
+    bar_parts = UNICODE_BAR_PARTS if Configuration.UNICODE_ENABLED else C437_BAR_PARTS
+    segments = len(bar_parts) - 1
+    center_part = int(cols * fraction * segments) % segments
     end_chars = cols - start_chars - 1
-    bar_text = BAR_EIGHTHS[8] * start_chars + BAR_EIGHTHS[center_eighths] + BAR_EIGHTHS[0] * end_chars
+    bar_text = bar_parts[-1] * start_chars + bar_parts[center_part] + bar_parts[0] * end_chars
     bar_text = color(bar_text, Configuration.PROGRESS_FOREGROUND_COLOR)
     return color_bg(bar_text, Configuration.PROGRESS_BACKGROUND_COLOR)
 
 
 def histogram_height(fractions: list[float]) -> str:
+    bar_parts = UNICODE_HEIGHT_PARTS if Configuration.UNICODE_ENABLED else C437_HEIGHT_PARTS
     output = ""
-    for i, fraction in enumerate(fractions):
-        eighths = int(max(min(1, fraction), 0) * 7)
+    segments = len(bar_parts) - 1
+    for fraction in fractions:
+        part = int(max(min(1, fraction), 0) * (segments - 1))
         if fraction > 0:
-            eighths += 1
-        output += HEIGHT_EIGHTHS[eighths]
+            part += 1
+        output += bar_parts[part]
     output = color(output, Configuration.PROGRESS_FOREGROUND_COLOR)
     return color_bg(output, Configuration.PROGRESS_BACKGROUND_COLOR)
 
@@ -391,11 +404,11 @@ def histogram_color(fractions: list[float]) -> str:
         colors = ["white", "white"]
     elif len(colors) == 1:
         colors = [colors[0], colors[0]]
-    for i, fraction in enumerate(fractions):
+    for fraction in fractions:
         color_index = int(max(min(1, fraction), 0) * (len(colors) - 2))
         if fraction > 0:
             color_index += 1
-        output += color(HEIGHT_EIGHTHS[8], colors[color_index])
+        output += color(C437_HEIGHT_PARTS[-1], colors[color_index])
     return output
 
 
@@ -424,30 +437,30 @@ def clear_line() -> None:
         print("\033[2K", end="")
 
 
-def color(text: str, color: str) -> str:
+def color(text: str, color_str: str) -> str:
     if text == "":
         return text
-    if len(color) > 1 and color[-1].isdigit():
-        color = color
-    elif color in ANSI_COLOR_MAP:
-        color = ANSI_COLOR_MAP[color]
+    if len(color_str) > 1 and color_str[-1].isdigit():
+        pass # ANSI code, pass directly in
+    elif color_str in ANSI_COLOR_MAP:
+        color_str = ANSI_COLOR_MAP[color_str]
     else:
-        print(f"Recoverable internal error: unknown color {color} requested.")
+        print(f"Recoverable internal error: unknown color {color_str} requested.")
         return text
-    return color_by_code(text, color)
+    return color_by_code(text, color_str)
 
 
-def color_bg(text: str, color: str) -> str:
+def color_bg(text: str, color_str: str) -> str:
     if text == "":
         return text
-    if len(color) > 1 and color[-1].isdigit():
-        color = color
-    elif color in ANSI_BG_COLOR_MAP:
-        color = ANSI_BG_COLOR_MAP[color]
+    if len(color_str) > 1 and color_str[-1].isdigit():
+        pass # ANSI code, pass directly in
+    elif color_str in ANSI_BG_COLOR_MAP:
+        color = ANSI_BG_COLOR_MAP[color_str]
     else:
-        print(f"Recoverable internal error: unknown color {color} requested.")
+        print(f"Recoverable internal error: unknown color {color_str} requested.")
         return text
-    return color_by_code(text, color)
+    return color_by_code(text, color_str)
 
 
 def color_by_code(text: str, color_code: str) -> str:
@@ -456,24 +469,20 @@ def color_by_code(text: str, color_code: str) -> str:
     return f"\033[{color_code}m{text}\033[0m"
 
 
-def color_bad(text: str, color_enabled: bool = True) -> str:
+def color_bad(text: str) -> str:
     return color(text, Configuration.ERROR_COLOR)
 
 
-def color_good(text: str, color_enabled: bool = True) -> str:
+def color_good(text: str) -> str:
     return color(text, Configuration.GOOD_COLOR)
 
 
-def color_rev(text: str, color_enabled: bool = True) -> str:
+def color_rev(text: str) -> str:
     return color(text, Configuration.COMMIT_COLOR)
 
 
-def color_key(text: str, color_enabled: bool = True) -> str:
+def color_key(text: str) -> str:
     return color(text, Configuration.IMPORTANT_COLOR)
-
-
-def color_code(text: str, color_enabled: bool = True) -> str:
-    return color(text, "bold blue")
 
 
 def warn(text: str) -> str:

@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import shutil
 import sys
 from typing import Optional
 
@@ -11,7 +12,7 @@ import src.mrp_manager as mrp_manager
 import src.signal_handler as signal_handler
 import src.storage as storage
 import src.terminal as terminal
-# TODO _ import??
+
 from src.bisect import BisectRunner, _launch_any
 from src.config import Configuration, PrintMode
 
@@ -23,7 +24,7 @@ def main() -> None:
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
     storage.init_storage()
     terminal.init_terminal()
-    signal_handler.install()   
+    # TODO signal_handler.install()   
     process_command_and_arguments()
 
 
@@ -44,8 +45,8 @@ def process_command_and_arguments() -> None:
     parser.add_argument("--color", nargs="?", const=True, default=None, type=bool_arg_parse, help=
         "Enable colored output")
     parser.add_argument("-c", "--config", type=str, help=
-        "Path to the configuration file. Defaults to config.ini, falls back to default_{platform}_config.ini.")
-    parser.add_argument("-i", "--ignore-old-errors", nargs="?", const=True, default=None, type=bool_arg_parse, help=
+        f"Path to the configuration file. Defaults to config.ini, falls back to default_{platform}_config.ini.")
+    parser.add_argument("-i", "--ignore-old-errors", action="store_true", help=
         "Don't skip commits even if they have been unbuildable in the past")
     parser.set_defaults(print_mode=PrintMode.LIVE if sys.stdout.isatty() else PrintMode.VERBOSE)
 
@@ -56,25 +57,25 @@ def process_command_and_arguments() -> None:
         help="Initializes the workspace and checks that things are set up properly.",
         description="This command ensures that the workspace is set up correctly and does nothing else. "
         + "Running it on first set up will help make sure everything is in order.")
-    init_parser.set_defaults(func=lambda args: init_command())
+    init_parser.set_defaults(func=lambda _: init_command())
 
-    update_parser = subparsers.add_parser("update", 
+    update_parser = subparsers.add_parser("update",
         help="Fetch, compile, and cache missing commits.",
         description="This command fetches the latest commits from the remote repository, "
         + "compiles them if they are missing, and caches the compiled binaries. ")
     update_parser.add_argument("-n", type=int, help=
         "Only compile and cache 1 in every N commits.")
-    update_parser.add_argument("-r", "--range", type=str, help=
-        "The commit range to compile, format 'start..end'. Defaults to the values in config file.")
+    update_parser.add_argument("-r", "--range", type=str, action="append", help=
+        "The commit range(s) to compile, format 'start..end'. Defaults to the values in config file.")
     update_parser.add_argument("cursor_rev", nargs="?", help=
         "The revision to start working back from.")
     update_parser.set_defaults(func=lambda args: update_command(args.n, args.cursor_rev, args.range))
 
     repro_parser = subparsers.add_parser("repro", help=
         "Reproduce an issue using the specified parameters.")
-    repro_parser.add_argument("-d", "--discard", nargs="?", const=True, default=None, type=bool_arg_parse, help=
+    repro_parser.add_argument("-d", "--discard", action="store_true", help=
         "Prevent caching binaries compiled during a bisect.")
-    repro_parser.add_argument("-c", "--cached-only", nargs="?", const=True, default=None, type=bool_arg_parse, help=
+    repro_parser.add_argument("-c", "--cached-only", action="store_true", help=
         "Prevent compiling at all during a bisect.")
     repro_parser.add_argument("-e", "--execution-parameters", type=str, help=
         "The parameters to pass to the Godot executable. See the config.ini comments for details.")
@@ -92,13 +93,13 @@ def process_command_and_arguments() -> None:
 
     bisect_parser = subparsers.add_parser("bisect", help=
         "Bisect history to find a regression's commit via an interactive mode.")
-    bisect_parser.add_argument("-d", "--discard", nargs="?", const=True, default=None, type=bool_arg_parse, help=
+    bisect_parser.add_argument("-d", "--discard", action="store_true", help=
         "Prevent caching binaries compiled during a bisect.")
-    bisect_parser.add_argument("-c", "--cached-only", nargs="?", const=True, default=None, type=bool_arg_parse, help=
+    bisect_parser.add_argument("-c", "--cached-only", action="store_true", help=
         "Prevent compiling at all during a bisect.")
     bisect_parser.add_argument("-e", "--execution-parameters", type=str, help=
         "The parameters to pass to the Godot executable. See the config.ini comments for details.")
-    bisect_parser.add_argument("--ignore-date", nargs="?", const=True, default=None, type=bool_arg_parse, help=
+    bisect_parser.add_argument("--ignore-date", action="store_true", help=
         "Don't use the issue open date to cut down the commit range.")
     bisect_parser.add_argument("--path-spec", type=str, default=None, help=
         "Limit the bisect to commits with specific files. See git bisect's path_spec behavior for full details.")
@@ -131,7 +132,7 @@ def process_command_and_arguments() -> None:
         "Pack completed bundles.")
     compress_parser.add_argument("-n", type=int, help=
         "Allow gaps of size N - 1 while bundling. Useful for 1 in N updates.")
-    compress_parser.add_argument("-a", "--all", nargs="?", const=True, default=None, type=bool_arg_parse, help=
+    compress_parser.add_argument("-a", "--all", action="store_true", help=
         "Bundle and compress all loose files, regardless of whether they're optimally similar.")
     compress_parser.set_defaults(func=lambda args: compress_command(args.n, args.all))
 
@@ -146,7 +147,7 @@ def process_command_and_arguments() -> None:
     workspace = Configuration.WORKSPACE_PATH
     if not os.path.exists(workspace):
         print(f"BiMon requires a Godot workspace at path '{workspace}'.")
-        clone_response = input(f"Clone one there now? (y/n): ").strip().lower()
+        clone_response = input("Clone one there now? [y/N]: ").strip().lower()
         if clone_response.startswith('y'):
             git.clone("https://github.com/godotengine/godot.git", workspace)
         else:
@@ -174,59 +175,91 @@ def global_args(args):
         Configuration.PRINT_MODE = args.print_mode
 
 
+def get_range_error(start: str, end: str) -> Optional[str]:
+    start = start.strip()
+    end = end.strip()
+    if start == "":
+        return "Invalid range: start was empty."
+    if end == "":
+        return "Invalid range: end was empty."
+    resolved_start = git.resolve_ref(start)
+    if resolved_start == "":
+        return f"Invalid range: start commit ({start}) was not found."
+    resolved_end = git.resolve_ref(end)
+    if resolved_end == "":
+        return f"Invalid range: end commit ({end}) was not found."
+    if not git.is_ancestor(resolved_start, resolved_end):
+        return f"Invalid range: start ({start}) is not an ancestor of end ({end})."
+    return None
+
+
 ############################################################
 #                         Commands                         #
 ############################################################
 
 
 def init_command() -> None:
-    print("You're good to go.")
-
-
-def update_command(n: Optional[int], cursor_rev: Optional[str], update_range: Optional[str]) -> None:
-    signal_handler.SHOULD_INSTADIE = False
-
-    if update_range is None or update_range == "":
-        start_commit = git.resolve_ref(Configuration.RANGE_START)
-        end_commit = git.resolve_ref(Configuration.RANGE_END)
-        update_range = f"{start_commit}..{end_commit}"
-
-    if ".." not in update_range:
-        print("The update range must be in the format 'start_commit..end_commit'.")
-        sys.exit(1)
-
-    update(n if n is not None else 1, cursor_rev, update_range)
-
-
-def update(n: int, cursor_commit: Optional[str], update_range: str) -> None:
+    print("Attempting to perform a fetch...")
     git.fetch()
 
-    start_commit, end_commit = update_range.split("..", 1)
-    start_commit = git.resolve_ref(start_commit.strip())
-    if start_commit == "":
-        print(f"Invalid range: start commit {update_range.split('..', 1)[0]} was not found.")
-        sys.exit(1)
-    end_commit = git.resolve_ref(end_commit.strip())
-    if end_commit == "":
-        print(f"Invalid range: end commit {update_range.split('..', 1)[1]} was not found.")
+    print("Checking config file...")
+    config_range_error = get_range_error(Configuration.RANGE_START, Configuration.RANGE_END)
+    if config_range_error is not None:
+        print("Problem found with range_start/range_end in the config:")
+        print(config_range_error)
         sys.exit(1)
 
-    if cursor_commit is not None and len(cursor_commit) > 0:
-        cursor_commit_tmp = git.resolve_ref(cursor_commit.strip())
-        if cursor_commit_tmp == "":
-            print(f"The cursor commit {cursor_commit} could not be found.")
+    print("Basic checks passed.")
+
+
+def update_command(n: Optional[int], cursor_rev: Optional[str], update_ranges: list[str]) -> None:
+    signal_handler.SHOULD_INSTADIE = False
+
+    if len(update_ranges) == 0:
+        update_ranges = [f"{Configuration.RANGE_START}..{Configuration.RANGE_END}"]
+
+    git.fetch()
+    parsed_ranges = []
+    for update_range in update_ranges:
+        if update_range.count("..") != 1:
+            print("Range must be in the format 'start_commit..end_commit'.")
             sys.exit(1)
-        cursor_commit = cursor_commit_tmp
-    else:
-        cursor_commit = end_commit
+        start_commit, end_commit = update_range.split("..")
+        range_error = get_range_error(start_commit.strip(), end_commit.strip())
+        if range_error is not None:
+            print(range_error)
+            sys.exit(1)
+        resolved_start = git.resolve_ref(start_commit)
+        resolved_end = git.resolve_ref(end_commit)
+        parsed_ranges.append((resolved_start, resolved_end))
 
-    rev_list = git.query_rev_list(start_commit, end_commit)
+    if cursor_rev is not None and len(cursor_rev) > 0:
+        cursor_rev_tmp = git.resolve_ref(cursor_rev.strip())
+        if cursor_rev_tmp == "":
+            print(f"The cursor commit {cursor_rev} could not be found.")
+            sys.exit(1)
+        cursor_rev = cursor_rev_tmp
+    else:
+        cursor_rev = parsed_ranges[-1][1]
+
+    update(n if n is not None else 1, cursor_rev, parsed_ranges)
+
+
+def update(n: int, cursor_commit: str, update_ranges: list[tuple[str, str]]) -> None:
+    rev_list = []
+    seen = set()
+    for start, end in update_ranges:
+        for rev in git.query_rev_list(start, end):
+            if rev not in seen:
+                seen.add(rev)
+                rev_list.append(rev)
     if len(rev_list) == 0:
-        print("Invalid range: there were no commits found in that range.")
+        print("Invalid range: there were no commits found in the update range(s).")
         sys.exit(1)
+
     cut = rev_list.index(cursor_commit)
     if cut < 0:
-        print(f"The cursor commit {cursor_commit} was not in the commit range {update_range}.")
+        print(f"The cursor commit {cursor_commit} was not in the commit range(s).")
         sys.exit(1)
 
     missing_commits = list(get_missing_commits(rev_list, n)[::-1])
@@ -250,24 +283,24 @@ def get_missing_commits(rev_list: list[str], n: int) -> list[str]:
         present_commits.update(storage.get_compiler_error_commits())
     missing_commits = []
     sequential_missing = 0
-    for i in range(len(rev_list)):
-        if rev_list[i] in present_commits:
+    for rev in rev_list:
+        if rev in present_commits:
             sequential_missing = 0
         else:
             sequential_missing += 1
         if sequential_missing >= n:
-            missing_commits.append(rev_list[i])
+            missing_commits.append(rev)
             sequential_missing = 0
     return missing_commits
 
 
 def repro_command(
-        execution_parameters: Optional[str], 
-        discard: bool, 
-        cached_only: bool, 
-        issue: Optional[str], 
-        project: Optional[str], 
-        commit: Optional[str], 
+        execution_parameters: Optional[str],
+        discard: bool,
+        cached_only: bool,
+        issue: Optional[str],
+        project: Optional[str],
+        commit: Optional[str],
         project_or_issue_or_commit: list[str]
     ) -> None:
     _, commit, execution_parameters, project = determine_execution_parameters(
@@ -278,6 +311,11 @@ def repro_command(
     compiler_error_commits = storage.get_compiler_error_commits()
 
     if commit is None:
+        range_error = get_range_error(Configuration.RANGE_START, Configuration.RANGE_END)
+        if range_error is not None:
+            print("Problem found with range_start/range_end in the config:")
+            print(range_error)
+            sys.exit(1)
         rev_list = git.query_rev_list(Configuration.RANGE_START, Configuration.RANGE_END)
         rev_list = [rev for rev in rev_list if rev in cached_commits]
         if len(rev_list) > 0:
@@ -294,7 +332,7 @@ def repro_command(
         else:
             print("No cached commits found to repro with.")
             print("Using the last commit in the range.")
-            commit = Configuration.RANGE_END
+            commit = git.resolve_ref(Configuration.RANGE_END)
     else:
         commit = git.resolve_ref(commit)
         if commit not in cached_commits and cached_only:
@@ -311,13 +349,13 @@ def repro_command(
 
 
 def bisect_command(
-        execution_parameters: Optional[str], 
-        discard: bool, 
-        cached_only: bool, 
-        ignore_date: bool, 
-        path_spec: Optional[str], 
-        project: Optional[str], 
-        issue: Optional[str], 
+        execution_parameters: Optional[str],
+        discard: bool,
+        cached_only: bool,
+        ignore_date: bool,
+        path_spec: Optional[str],
+        project: Optional[str],
+        issue: Optional[str],
         project_or_issue: list[str]
     ) -> None:
     issue_time, _, execution_parameters, project = determine_execution_parameters(
@@ -326,7 +364,7 @@ def bisect_command(
     if project is None:
         project = ""
     bisect_runner = BisectRunner(
-        discard, cached_only, ignore_date, project, execution_parameters, path_spec, issue_time
+        discard, cached_only, ignore_date, execution_parameters, path_spec, issue_time
     )
     bisect_runner.run()
 
@@ -337,11 +375,12 @@ def extract_command(rev: str, file_path: str) -> None:
 
 
 def purge_command(mrps: bool, duplicates: bool) -> None:
+    purge_count = 0
     if duplicates:
-        purge_count = storage.purge_duplicate_files()
-    if os.path.exists(bisect.TMP_DIR):
-        purge_count += len(os.listdir(bisect.TMP_DIR))
-        shutil.rmtree(bisect.TMP_DIR)
+        purge_count += storage.purge_duplicate_files(set())
+    if os.path.exists(BisectRunner.TMP_DIR):
+        purge_count += len(os.listdir(BisectRunner.TMP_DIR))
+        shutil.rmtree(BisectRunner.TMP_DIR)
     if mrps:
         purge_count += mrp_manager.purge_all()
     print(f"Purged {purge_count} items.")
@@ -351,14 +390,39 @@ def compile_command(revs: list[str]) -> None:
     signal_handler.SHOULD_INSTADIE = False
     if len(revs) == 0:
         revs.append("HEAD")
-    commits = [git.resolve_ref(rev) for rev in revs]
+    commits = []
+    seen = set()
+    for rev in revs:
+        if ".." in rev:
+            if rev.count("..") != 1:
+                print("Range must be in the format 'start_commit..end_commit'.")
+                sys.exit(1)
+            start, end = tuple(part.strip() for part in rev.split(".."))
+            range_error = get_range_error(start, end)
+            if range_error is not None:
+                print(range_error)
+                sys.exit(1)
+            range_revs = git.query_rev_list(start, end)
+            for rev in range_revs:
+                if rev not in seen:
+                    seen.add(rev)
+                    commits.append(rev)
+        else:
+            resolved_rev = git.resolve_ref(rev)
+            if resolved_rev == "":
+                print(f"Invalid commit: {rev} was not found.")
+                sys.exit(1)
+            if resolved_rev not in seen:
+                seen.add(resolved_rev)
+                commits.append(resolved_rev)
+
     if not factory.compile(commits, should_compress=True, retry_compress=True):
         sys.exit(1)
 
 
-def compress_command(n: Optional[int], all: bool) -> None:
+def compress_command(n: Optional[int], compress_all: bool) -> None:
     signal_handler.SHOULD_INSTADIE = False
-    if not factory.compress(n if n is not None else 1, retry=True, all=all):
+    if not factory.compress(n if n is not None else 1, retry=True, compress_all=compress_all):
         sys.exit(1)
 
 
@@ -419,17 +483,10 @@ def determine_execution_parameters(
         if commit is not None:
             commit = git.resolve_ref(commit)
             if commit == "":
-                print(f"Invalid commit: {commit_internal} was not found.")
+                commit_str = commit_internal if commit_internal is not None else commit
+                print(f"Invalid commit: {commit_str} was not found.")
                 sys.exit(1)
-        else:
-            present_commits = storage.get_present_commits()
-            rev_list = git.query_rev_list(Configuration.RANGE_START, Configuration.RANGE_END)
-            for rev in rev_list[::-1]:
-                if rev in present_commits:
-                    commit = rev
-                    break
 
-    cached_commits = storage.get_present_commits()
     if execution_parameters is None:
         execution_parameters = Configuration.DEFAULT_EXECUTION_PARAMETERS
     if "{PROJECT}" in execution_parameters:
@@ -456,6 +513,9 @@ def determine_execution_parameters(
 
     if "{PROJECT}" in execution_parameters:
         execution_parameters = execution_parameters.replace("{PROJECT}", project)
+
+    if issue_number != -1:
+        print("Issue link:", mrp_manager.ISSUES_URL + str(issue_number))
 
     issue_time = -1
     if issue_number >= 0:

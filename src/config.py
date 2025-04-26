@@ -1,5 +1,6 @@
 import configparser
 import os
+import shlex
 import sys
 from enum import Enum
 
@@ -28,11 +29,7 @@ class Configuration:
     FORCE: bool = False
     IGNORE_OLD_ERRORS: bool = False
     PATH_SPEC: str = ""
-
-    # Hotkey settings
-    ENABLE_HOTKEYS: bool
-    MARK_GOOD_HOTKEY: str
-    MARK_BAD_HOTKEY: str
+    ADD_ISSUE_TO_TITLE: bool = False
 
     # Compression settings
     COMPRESS_PACK_SIZE: int
@@ -47,6 +44,7 @@ class Configuration:
     # Output settings
     PRINT_MODE: PrintMode = PrintMode.VERBOSE
     SHOW_TAGS_ON_HISTOGRAM: bool = True
+    UNICODE_ENABLED: bool = True
     COLOR_ENABLED: bool
     MESSAGE_COLOR: str
     IMPORTANT_COLOR: str
@@ -58,6 +56,7 @@ class Configuration:
     PROGRESS_BACKGROUND_COLOR: str
     HEATMAP_COLORS: list[str]
     
+    @staticmethod
     def load_from(filepath: str = ""):
         config = configparser.ConfigParser()
 
@@ -77,7 +76,7 @@ class Configuration:
                 print(f"Neither config.ini nor {default_config_path} found and no --config provided. Exiting.")
                 sys.exit(1)
         elif not os.path.exists(filepath):
-            print(f"The file passed to --config could not be opened. Exiting.")
+            print("The file passed to --config could not be opened. Exiting.")
             sys.exit(1)
         config.read(filepath)
 
@@ -86,6 +85,7 @@ class Configuration:
         Configuration.RANGE_END = config.get("General", "range_end")
         Configuration.WORKSPACE_PATH = config.get("General", "workspace_path")
         Configuration.FORCE = Configuration._is_subdirectory(Configuration.WORKSPACE_PATH, os.getcwd())
+        Configuration.ADD_ISSUE_TO_TITLE = config.getboolean("General", "add_issue_to_title")
 
         # Output settings
         Configuration.SUBWINDOW_ROWS = config.getint("Output", "subwindow_rows")
@@ -101,11 +101,6 @@ class Configuration:
         Configuration.PROGRESS_BACKGROUND_COLOR = config.get("Output", "progress_background_color")
         Configuration.HEATMAP_COLORS = config.get("Output", "heatmap_colors").split()
 
-        # Hotkey settings
-        Configuration.ENABLE_HOTKEYS = config.getboolean("Hotkeys", "enable_hotkeys")
-        Configuration.MARK_GOOD_HOTKEY = config.get("Hotkeys", "mark_good")
-        Configuration.MARK_BAD_HOTKEY = config.get("Hotkeys", "mark_bad")
-
         # Compression settings
         Configuration.COMPRESS_PACK_SIZE = config.getint("Compression", "pack_size")
 
@@ -113,12 +108,19 @@ class Configuration:
         Configuration.COMPILER_FLAGS = config.get("Compilation", "compiler_flags")
         Configuration.COMPILER_FLAGS += " " + config.get("Compilation", "library_flags")
         Configuration.BINARY_NAME = config.get("Compilation", "binary_name")
+        Configuration.ARCHIVE_PATHS = shlex.split(config.get("Compilation", "archive_paths"))
+        Configuration.ARCHIVE_PATHS = [
+            path.replace("{BINARY_NAME}", Configuration.BINARY_NAME)
+            for path in Configuration.ARCHIVE_PATHS
+        ]
 
         # Execution settings
+        Configuration.BACKGROUND_DECOMPRESSION_LAYERS = config.getint("Execution", "background_decompression_layers")
         Configuration.DEFAULT_EXECUTION_PARAMETERS = config.get("Execution", "execution_parameters")
 
 
+    @staticmethod
     def _is_subdirectory(path: str, directory: str) -> bool:
-        path = os.path.abspath(path)
-        directory = os.path.abspath(directory)
-        return os.path.commonpath([path, directory]) == directory
+        abs_path = os.path.abspath(path)
+        abs_directory = os.path.abspath(directory)
+        return os.path.commonpath([abs_path, abs_directory]) == directory

@@ -1,3 +1,4 @@
+import glob
 import os
 import shlex
 import shutil
@@ -16,8 +17,8 @@ MIN_SUCCESSES = 3
 error_commits = set()
 
 
-def compress(n: int = 1, retry: bool = False, all: bool = False) -> bool:
-    bundles = compute_bundles(n, all)
+def compress(n: int = 1, retry: bool = False, compress_all: bool = False) -> bool:
+    bundles = compute_bundles(n, compress_all)
     for i, bundle in enumerate(bundles):
         bundle_id = bundle[0]
         print(f"Compressing bundle {i + 1} / {len(bundles)}")
@@ -27,7 +28,7 @@ def compress(n: int = 1, retry: bool = False, all: bool = False) -> bool:
                 print(f"Retrying compression of bundle {bundle_id} once.")
                 bundled = storage.compress_bundle(bundle_id, bundle)
             if not bundled:
-                print(f"Failed to compress all bundles.")
+                print("Failed to compress all bundles.")
                 return False
         if signal_handler.SHOULD_EXIT:
             break
@@ -44,9 +45,8 @@ def _handle_local_changes(ask: bool) -> None:
             for line in git.get_local_changes():
                 print("\t" + line)
             if ask:
-                print("Do you want to discard them? (y/n)")
-                answer = input().strip().lower()
-                if answer == "y":
+                answer = input("Do you want to discard them? [y/N]").strip().lower()
+                if answer.startswith("y"):
                     print("Discarding. Run with -f/--force to prevent this question in the future.")
                     git.clear_local_changes()
                     return
@@ -80,20 +80,10 @@ def split_list(lst: list, x: int) -> list[list]:
     return parts
 
 
-def print_compile_status(tags: list[str], rev_list: list[str], present_commits: set[str], current_i: int, commits: list[str], times: dict[str, float], error_commits: list[str]) -> None:
-    cols = terminal.get_cols()
-    print(terminal.box_top(title=terminal.color_key(f" Compiling #{current_i + 1} of {len(commits)} ")))
-    
-    percent_done = int(current_i / max(1, len(commits)) * 100)
-    average_time = sum(times.values()) / len(times) if times else 0
-    average_time_str = "--:--"
-    if average_time > 0:
-        seconds = int(round(average_time)) % 60
-        minutes = int(round(average_time)) // 60
-        average_time_str = f"{minutes:02}:{seconds:02}"
+def get_remaining_time_str(commit_count: int, average_time: float, current_i: int) -> str:
     remaining_time_str = "--:--"
     if average_time > 0:
-        remaining_time = int(average_time * (len(commits) - current_i) + 0.99)
+        remaining_time = int(average_time * (commit_count - current_i) + 0.99)
         seconds = remaining_time % 60
         minutes = remaining_time // 60
         hours = minutes // 60
@@ -104,16 +94,32 @@ def print_compile_status(tags: list[str], rev_list: list[str], present_commits: 
             remaining_time_str = f"{remaining_time / 60.0 / 60:.1f} hours"
         else:
             remaining_time_str = f"{minutes:02}:{seconds:02}"
-    remaining_time_str = terminal.color_key(remaining_time_str)
+    return terminal.color_key(remaining_time_str)
+
+
+def print_compile_status(tags: list[str], rev_list: list[str], present_commits: set[str], current_i: int, commits: list[str], times: dict[str, float], error_commits: list[str]) -> None:
+    cols = terminal.get_cols()
+    print(terminal.box_top(title=terminal.color_key(f" Compiling #{current_i + 1} of {len(commits)} ")))
+    
+    average_time = sum(times.values()) / len(times) if times else 0
+    average_time_str = "--:--"
+    if average_time > 0:
+        seconds = int(round(average_time)) % 60
+        minutes = int(round(average_time)) // 60
+        average_time_str = f"{minutes:02}:{seconds:02}"
+    remaining_time_str = get_remaining_time_str(len(commits), average_time, current_i)
     error_str = terminal.color_bad(f"{len(error_commits)}") if len(error_commits) > 0 else terminal.color_good("0")
     print(terminal.box_fit(
         f"Average time: {average_time_str}, Remaining time: {remaining_time_str}, Errors: {error_str}"
     ))
+
     print(terminal.box_fit(
         terminal.trim_str(f"Current commit: {git.get_short_log(commits[current_i])}", cols - 4)
     ))
-    progress_bar = "Job progress (" + terminal.color_key(f"{percent_done:2d}%") + "): "
-    progress_bar += terminal.progress_bar(cols - terminal.escape_len(progress_bar) - 2, float(current_i) / max(1, len(commits)))
+
+    percent_done = current_i * 100.0 / max(1, len(commits))
+    progress_bar = "Job progress (" + terminal.color_key(f"{int(percent_done):2d}%") + "): "
+    progress_bar += terminal.progress_bar(cols - terminal.escape_len(progress_bar) - 4, percent_done)
     print(terminal.box_fit(progress_bar))
     print(terminal.box_fit(""))
 
@@ -174,6 +180,8 @@ def print_histogram(cols: int, rev_list: list[str], tags: list[str], current_com
     }
     ignored_commits = storage.get_ignored_commits()
     rev_list = [rev for rev in rev_list if rev not in ignored_commits]
+    if len(rev_list) == 0:
+        return None
     full_percent = get_fraction_completed(rev_list, present_commits) * 100
     print(terminal.box_middle(title=f" Full Range Histogram ({full_percent:.1f}%)"))
 
@@ -196,7 +204,8 @@ def print_histogram(cols: int, rev_list: list[str], tags: list[str], current_com
         print(terminal.box_fit(tag_line))
 
     print(terminal.box_fit(terminal.histogram_height(buckets)))
-    print(terminal.box_fit(terminal.histogram_color(buckets)))
+    if Configuration.COLOR_ENABLED:
+        print(terminal.box_fit(terminal.histogram_color(buckets)))
 
     if Configuration.SHOW_TAGS_ON_HISTOGRAM:
         current_commit_time = git.get_commit_time(current_commit)
@@ -265,12 +274,12 @@ def compile(commits: list[str], should_compress: bool = True, n: int = 1, retry_
     return signal_handler.SHOULD_EXIT or not should_compress or compress(n, retry_compress)
 
 
-def compute_bundles(n: int, all: bool = False) -> list[list[str]]:
+def compute_bundles(n: int, compress_all: bool = False) -> list[list[str]]:
     rev_list = git.query_rev_list(Configuration.RANGE_START, Configuration.RANGE_END)
     compress_map = storage.read_compress_map()
     unbundled_versions = [rev for rev in rev_list if rev not in compress_map]
     ready_to_bundle = storage.get_unbundled_files()
-    if all:
+    if compress_all:
         for unbundled in ready_to_bundle:
             if unbundled not in unbundled_versions:
                 unbundled_versions.append(unbundled)
@@ -292,11 +301,11 @@ def compute_bundles(n: int, all: bool = False) -> list[list[str]]:
                     break
             else:
                 not_ready_seen += 1
-                if not_ready_seen >= n and not all:
+                if not_ready_seen >= n and not compress_all:
                     break
             bundle_start_i += 1
         
-        if all or len(bundle) >= Configuration.COMPRESS_PACK_SIZE:
+        if compress_all or len(bundle) >= Configuration.COMPRESS_PACK_SIZE:
             bundles.append(bundle)
 
     return bundles
@@ -310,19 +319,33 @@ def cache(current_commit: str = None) -> None:
     if current_commit is None:
         current_commit = git.resolve_ref("HEAD")
     print(f"Caching commit {current_commit}")
-    compiled_path = get_compiled_path()
-    storage_path = os.path.join("versions", current_commit)
-    shutil.move(compiled_path, storage_path)
-    try:
-        os.chmod(storage_path, os.stat(storage_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    except:
-        pass
+
+    storage_path = os.path.join(Configuration.WORKSPACE_PATH, "versions", current_commit)
+    if os.path.exists(storage_path):
+        print(f"Cached version '{storage_path}' already exists. Overwriting it.")
+        shutil.rmtree(storage_path)
+    os.makedirs(storage_path, exist_ok=True)
+
+    for archive_path in Configuration.ARCHIVE_PATHS:
+        full_glob_path = os.path.join(Configuration.WORKSPACE_PATH, archive_path)
+        for file_path in glob.glob(full_glob_path, recursive=True):
+            abs_file_path = os.path.abspath(file_path)
+            if not abs_file_path.startswith(os.path.abspath(Configuration.WORKSPACE_PATH)):
+                print(f"Error: Attempted to copy a file outside the workspace directory: {file_path}")
+                sys.exit(1)
+
+            relative_path = os.path.relpath(abs_file_path, Configuration.WORKSPACE_PATH)
+            destination_path = os.path.join(storage_path, relative_path)
+            os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+            shutil.move(abs_file_path, destination_path)
+
+    print(f"Commit {current_commit} has been successfully cached.")
 
 
 def single() -> bool:
     return terminal.execute_in_subwindow(
         command=["scons"] + shlex.split(Configuration.COMPILER_FLAGS),
-        title="scons", 
+        title="scons",
         rows=Configuration.SUBWINDOW_ROWS,
         cwd=Configuration.WORKSPACE_PATH,
     )

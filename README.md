@@ -38,6 +38,7 @@ If you've got a fancy `git bisect run` based workflow, you can have it retrieve 
 - Space. It'll take about 13 GB per 1k commits in the range you want to cover. 4.0 to 4.4 is about 260 GB.
 - This was made for Linux. If you want it on other platforms, PRs are welcome.
 - A reasonably recent version of git on your PATH
+- Python 3.9+ (maybe higher, I'm on 3.12, but I'm definitely using 3.9 features)
 
 ### Setup
 1) Check out a new copy of the `godotengine/godot` repo in a location outside the BiMon folder since they have separate git setups. This will be called your workspace folder. Using a dedicated clone of godot instead of reusing the one you do dev work on is strongly recommended.
@@ -111,78 +112,56 @@ src/mrp_manager.py:32:            sys.exit(1)
 src/mrp_manager.py:212:            sys.exit(1)
 bisect needs to handle its own error codes
 
-48 Functional
-  21 Major
-  - 3 Hotkeys
+27 Functional
+  14 Major
   - 2 MacOS support
         Support storing folders instead of binaries
         Support running nested file
   - 4 Optimize decompression times, redo bundles to match
-  - 4 Autoextract next possible commits in threads while bisecting
-        get_next_commits needs updating
   - 8 zip mode
         conversion command
-  27 Minor
-      Bugs
-      - 1 defend against size 0 ranges
-      - 1 audit behavior for extremely small commit ranges (1 commit, etc)
-      - 1 fix bugs with start_commit not being included in rev-lists
-      - 1 progress bar clips onto next line, blank line before histogram line??
+  13 Minor
+      3 Bugs
+      - 1 double check rev lists were meant to include start commit (bisect _rev_list only)
       - 1 ctrl c jumps up by 1 and overwrites the bottom bar of the compiler output
-      - 1 signal handler death message is incorrect for instadie modes
-      - 1 check that I don't assume range_start and range_end are resolved
       - 1 couldn't find that one MRP in the comments
-      - 1 check that is_ancestor being false for self isn't a problem
-      Arguments
-      - 2 use the commit range arguments everywhere
-            add initial range argument to bisect
-      - 1 allow for ranges in commit lists
-      - 1 boolean arguments shouldn't require the positionals, really awkward
-      - 1 startup check for range validity
-      Input/Output
-      - 1 print link to the issue page on repro
-      - 1 add issue number to project title
-      - 1 some inputs should allow enter for y probably
-      - 1 fallback bar if no unicode and no color
-      - 1 color bar shouldn't show if color is disabled/not supported
-      - 1 non unicode support
+      1 Arguments
+      - 1 add initial range argument to bisect, automarks as good and bad respectively
+      1 Input/Output
       - 1 256 color histogram support??
-      Misc
+      8 Misc
       - 1 bisect error codes
       - 1 cache before using so you don't have to reunpack on ctrl c
       - 1 Should more things fetch?
       --
-      - 1 bisect:320 no more commits to test (expand range?)
-      - 1 fast way to upload mrp
+      - 1 bisect:457 no more commits to test (expand range?)
+      - 1 export command
       - 1 keep track of a latest commit for repro instead of using the range?
+      - 1 repro try to use the one from HEAD/currently in bin?
+      --
+      - 1 I don't love how the bundles are computed only based on the config range
+      - 1 init should have a -y mode
 
-10 Finishing touches
-- 1 Add anything else useful to the init command
-      validate config
-      commit range should be extant
-      binary name
+6 Finishing touches
 - 1 Finalize requirements.txt
-- 2 Support command completion
 - 2 Better output, colors, text decorations?
-- 2 handle non live printmodes
 - 1 progress bar feels a bit cluttered
+- 1 update started further back than it should retest
+- 1 check that get_commit_time gets the right commit time
 
 Clean up
 - Code clean up pass
 - Repo organization pass
-- Use types consistently (dict vs Dict?)
 - Run a linter
 - Use correct ref/rev for git stuff
 - Consistent use of is not None vs truthiness
+- Consistent use of _ prefixes
 
 Testing
 - General
-- Check which arguments are required and which aren't
-- Non LLVM build outputs
 - Windows
       Needed to manually install pyreadline3, pywinpty
       can't scroll while subcommand is printing
-      unicode support is garbage
 
 Documentation
 - Write README.md
@@ -191,13 +170,14 @@ Documentation
 - Update argparser help strings
 - Write help subcommand
 
-Someday?
-- Terminal window resizing support
-- Find commits mentioned in the issue
-- Fullscreen update mode?
-- SIGINT doesn't print if triggered in the middle of another print
+Maybe someday
+- Non interactive bisect mode
+- Hotkeys
+- Make more general so this isn't just a godot specific tool
 - path spec should allow you to test commits outside that set if that's the only precompiled
 - Corrupted binaries aren't handled at all
-    Does killing the extraction threads litter the version space?
-- Non interactive bisect mode
-- Make more general so this isn't just a godot specific tool
+    - Does killing the extraction threads litter the version space?
+- SIGINT doesn't print if triggered in the middle of another print
+- Fullscreen update mode?
+- Terminal window resizing support?
+- Find commits mentioned in the issue?
