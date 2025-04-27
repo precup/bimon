@@ -9,36 +9,54 @@ import src.terminal as terminal
 from src.config import Configuration
 
 CACHE_NAME = "git_cache"
+# TODO precache loading is kinda inefficient
 PRECACHE_NAME = "git_precache"
 
 _commit_time_cache = {}
+_parent_cache = {}
 _diff_cache = {}
 _diff_precache = {}
 
 
 def load_cache() -> None:
-    global _commit_time_cache
     try:
         with open(CACHE_NAME, "r") as cache_file:
+            segment = 0
             for line in cache_file:
                 if line.startswith("#"):
+                    segment += 1
                     continue
                 parts = line.strip().split()
-                if len(parts) == 2:
+                if segment == 0:
                     _commit_time_cache[parts[0]] = int(parts[1])
+                elif segment == 1:
+                    src, dst = parts[0], parts[1]
+                    if src > dst:
+                        src, dst = dst, src
+                    if src not in _diff_cache:
+                        _diff_cache[src] = {}
+                    _diff_cache[src][dst] = int(parts[2])
+                elif segment == 2:
+                    _parent_cache[parts[0]] = set(parts[1:])
     except FileNotFoundError:
         pass
 
+load_cache()
 
-def add_to_cache(diff_results: dict[tuple[str, str], int]) -> None:
-    pass
+def save_cache() -> None:
+    with open(CACHE_NAME, "w") as cache_file:
+        for commit, timestamp in _commit_time_cache.items():
+            cache_file.write(f"{commit} {timestamp}\n")
+        cache_file.write("#\n")
+        for src, val in _diff_cache.items():
+            for dst, size in val.items():
+                cache_file.write(f"{src} {dst} {size}\n")
+        cache_file.write("#\n")
+        for commit, parents in _parent_cache.items():
+            cache_file.write(f"{commit} {' '.join(parents)}\n")
 
 
-def add_to_precache(commit_pairs: list[tuple[str, str]]) -> None:
-    pass
-
-
-def get_similar_commit(target_commit: str, all_commits: list[str], possible_commits: set[str]) -> str:
+def get_neighbors(all_commits: list[str]) -> dict[str, set[str]]:
     # TODO can this get_parents call be batched?
     neighbors = {
         commit: get_parents(commit) for commit in all_commits
@@ -51,16 +69,40 @@ def get_similar_commit(target_commit: str, all_commits: list[str], possible_comm
             else:
                 to_remove.add(neighbor)
         neighbors[commit] -= to_remove
+    return neighbors
+
+
+def sort_commits(commits_to_sort: set[str], all_commits: list[str]) -> list[str]:
+    neighbors = get_neighbors(all_commits)
+    save_cache()
+    visited = set()
+    sorted_commits = []
+    for commit in all_commits[::-1]:
+        curr = commit
+        while curr is not None and curr not in visited:
+            visited.add(curr)
+            sorted_commits.append(curr)
+            curr = get_similar_commit(curr, all_commits, commits_to_sort, neighbors, visited)
+    return sorted_commits
+
+
+def get_similar_commit(target_commit: str, all_commits: list[str], possible_commits: set[str], neighbors: dict[str, set[str]] = {}, not_possible_commits: set[str] = set()) -> str:
+    if neighbors == {}:
+        neighbors = get_neighbors(all_commits)
 
     queue = []
     heapq.heappush(queue, (0, target_commit))
     seen = set()
+    best_per = {}
     best = None
     best_diff = -1
     while queue:
         total, curr = heapq.heappop(queue)
+        if curr in seen and curr in best_per and total >= best_per[curr]:
+            continue
         seen.add(curr)
-        if curr in possible_commits:
+        best_per[curr] = total
+        if curr in possible_commits and curr not in not_possible_commits:
             if best is None or total < best_diff:
                 best_diff = total
                 best = curr
@@ -69,7 +111,7 @@ def get_similar_commit(target_commit: str, all_commits: list[str], possible_comm
             continue
         for neighbor in neighbors[curr]:
             if neighbor not in seen:
-                diff = get_diff(curr, neighbor)
+                diff = get_diff_size(curr, neighbor)
                 heapq.heappush(queue, (total + diff, neighbor))
     return best
 
@@ -210,11 +252,36 @@ def is_ancestor(possible_ancestor: str, commit: str) -> bool:
 
 
 def get_parents(commit: str) -> set[str]:
+    if commit in _parent_cache:
+        return _parent_cache[commit]
     output = get_git_output(["log", "--pretty=format:%P", commit, "-n", "1"])
-    return {line.strip() for line in output.split() if len(line.strip()) > 0}
+    retval = {line.strip() for line in output.split() if len(line.strip()) > 0}
+    _parent_cache[commit] = retval
+    return retval
 
 
+_diffs_added = 0
 def get_diff_size(commit_src: str, commit_dst: str) -> int:
+    global _diffs_added
+    if commit_src > commit_dst:
+        commit_src, commit_dst = commit_dst, commit_src
+    if commit_src in _diff_precache:
+        if commit_dst in _diff_precache[commit_src]:
+            return _diff_precache[commit_src][commit_dst]
+    if commit_src in _diff_cache:
+        if commit_dst in _diff_cache[commit_src]:
+            return _diff_cache[commit_src][commit_dst]
+    retval = _get_diff_size(commit_src, commit_dst)
+    if commit_src not in _diff_cache:
+        _diff_cache[commit_src] = {}
+    _diff_cache[commit_src][commit_dst] = retval
+    _diffs_added += 1
+    if _diffs_added % 100 == 0:
+        save_cache()
+    return retval
+
+
+def _get_diff_size(commit_src: str, commit_dst: str) -> int:
     output = get_git_output(["diff", "--shortstat", commit_src, commit_dst])
     if len(output) == 0:
         return 0
@@ -232,8 +299,6 @@ def get_diff_size(commit_src: str, commit_dst: str) -> int:
 
 
 def cache_clear() -> None:
-    global _commit_time_cache
-    _commit_time_cache = {}
     _query_rev_list.cache_clear()
     get_short_name.cache_clear()
     get_plain_short_name.cache_clear()

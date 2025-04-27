@@ -16,9 +16,199 @@ from src.config import Configuration, PrintMode
 MIN_SUCCESSES = 3
 error_commits = set()
 
+import threading
+waiting_tasks = []
+finished_commits = set()
+claimed_commits = set()
+map_lock = threading.Lock()
+print_lock = threading.Lock()
+futures = []
+executor = None
+needed_commits = {}
+needed_commits_lock = threading.Lock()
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def _extract_batch(commit, bundle_map):
+    extracted = set()
+    with needed_commits_lock:
+        extract_all = shutil.disk_usage(".")[2] > 80 * 1024 * 1024 * 1024
+        if commit not in claimed_commits and not os.path.exists(os.path.join(storage.VERSIONS_DIR, commit)):
+            extracted.add(commit)
+            old_compress_map = storage.read_compress_map()
+            if commit in old_compress_map:
+                bundle_name = old_compress_map[commit]
+                if bundle_name in needed_commits:
+                    extracted.update(needed_commits[bundle_name])
+                    del needed_commits[bundle_name]
+            if extract_all:
+                for bundle_commit in bundle_map.get(commit, set()):
+                    loose_path = os.path.join(storage.VERSIONS_DIR, bundle_commit)
+                    if not os.path.exists(loose_path) and bundle_commit not in claimed_commits:
+                        extracted.add(bundle_commit)
+            claimed_commits.update(extracted)
+
+    if len(extracted) > 0:
+        wd = f"{commit}.tmp"
+        if os.path.exists(wd):
+            shutil.rmtree(wd)
+        os.mkdir(wd)
+        storage._extract_commit(commit, desired_files=extracted, wd=wd)
+        for file in extracted:
+            file_path = os.path.join(wd, file)
+            if not os.path.exists(os.path.join(storage.VERSIONS_DIR, file)):
+                shutil.move(file_path, os.path.join(storage.VERSIONS_DIR, file))
+        shutil.rmtree(wd) 
+
+    if len(extracted) > 0:
+        with print_lock:
+            print(f"Extracted commit {commit}" + (f" and {len(extracted) - 1} others." if len(extracted) > 1 else ""))
+
+    while True:
+        next_args = None
+        with map_lock:
+            finished_commits.update(extracted)
+            to_remove = None
+            for i in range(len(waiting_tasks)):
+                waiting_key, requirements = waiting_tasks[i]
+                if len(requirements - finished_commits) == 0:
+                    print("Found bundle waiting for compression.")
+                    next_args = ("recompress", waiting_key[0], waiting_key[1])
+                    to_remove = i
+                    break
+            if to_remove is not None:
+                waiting_tasks.pop(to_remove)
+        if next_args is None:
+            break
+        _ex_fn(next_args)
+            
+
+def _ex_fn(tup):
+    operation, arg1, arg2 = tup
+    if operation == "recompress":
+        _recompress_batch(arg1, arg2)
+    else:
+        _extract_batch(arg1, arg2)
+
+
+def _recompress_batch(bundle, target_name):
+    arcpaths = {}
+    for commit in bundle:
+        commit_path = os.path.join(storage.VERSIONS_DIR, commit)
+        arc_path = os.path.join(commit, "bin", "godot.linuxbsd.editor.x86_64.llvm")
+        arcpaths[commit_path] = arc_path
+    success = storage.compress_with_zstd_by_name(arcpaths, os.path.join(storage.VERSIONS_DIR, target_name))
+    if not success:
+        with print_lock:
+            print(f"Failed to recompress bundle {target_name}.")
+        return False
+    with map_lock:
+        for commit in bundle:
+            storage.add_to_compress_map(commit, target_name, newmap=True)
+    for commit in bundle:
+        commit_path = os.path.join(storage.VERSIONS_DIR, commit)
+        if os.path.exists(commit_path):
+            os.remove(commit_path)
+    with print_lock:
+        print(f"Recompressed bundle {target_name} with {len(bundle)} commits.")
+    return True
+
+
+def recompress(thread_count, bundle_size) -> bool:
+    old_compress_map = storage.read_compress_map()
+    bundle_map = {}
+    for commit, bundle in old_compress_map.items():
+        if bundle not in bundle_map:
+            bundle_map[bundle] = set()
+        bundle_map[bundle].add(commit)
+    new_compress_map = storage.read_compress_map(newmap=True)
+    rev_list = git.query_rev_list(Configuration.RANGE_START, Configuration.RANGE_END)
+    needs_recompress = {commit for commit in rev_list if commit not in new_compress_map}
+    rev_list = git.sort_commits(needs_recompress, rev_list)
+    bundles = []
+    for i in range(0, len(rev_list) - bundle_size + 1, bundle_size):
+        bundles.append(rev_list[i:i + bundle_size])
+    bundles = [bundle for bundle in bundles if all(commit in old_compress_map or os.path.exists(os.path.join(storage.VERSIONS_DIR, commit)) for commit in bundle)]
+
+    with ThreadPoolExecutor(max_workers=thread_count) as exe:
+        global executor, futures
+        futures = []
+        executor = exe
+        while len(bundles) > 0:
+            extant_versions = {path for path in os.listdir(storage.VERSIONS_DIR) if '.' not in path}
+            with map_lock:
+                with needed_commits_lock:
+                    extant_versions.update(claimed_commits)
+            best_bundle = None
+            best_bundle_extant = 0
+            for i, bundle in enumerate(bundles):
+                bundle_extant = sum(1 for rev in bundle if rev in extant_versions)
+                if best_bundle is None or bundle_extant > best_bundle_extant:
+                    best_bundle = i
+                    best_bundle_extant = bundle_extant
+            if best_bundle is None:
+                best_bundle = 0
+            bundle = bundles.pop(best_bundle)
+
+            extractions = []
+            for commit in bundle:
+                if commit not in old_compress_map:
+                    continue
+                if os.path.exists(os.path.join(storage.VERSIONS_DIR, commit)):
+                    continue
+                extractions.append(commit)
+            
+            print(f"Extracting {len(extractions)} commits for bundle")
+
+            with map_lock:
+                with needed_commits_lock:
+                    for commit in extractions:
+                        if commit not in claimed_commits and commit in old_compress_map:
+                            bundle_name = old_compress_map[commit]
+                            if bundle_name not in needed_commits:
+                                needed_commits[bundle_name] = set()
+                            needed_commits[bundle_name].add(commit)
+                if len(extractions) == 0:
+                    futures.append(executor.submit(_ex_fn, ("recompress", bundle, f"{bundle[0]}.tar.zst")))
+                else:
+                    waiting_tasks.append(((bundle, f"{bundle[0]}.tar.zst"), set(bundle)))
+                    for commit in extractions:
+                        futures.append(executor.submit(_ex_fn, ("extract", commit, bundle_map)))
+        
+
+            while len(futures) >= 2 * thread_count:
+                time.sleep(0.5)
+                with map_lock:
+                    to_remove = []
+                    for i in range(len(futures)):
+                        if futures[i].done():
+                            to_remove.append(i)
+                            try:
+                                futures[i].result()
+                            except Exception as e:
+                                print(f"Error processing task: {e}")
+                                raise
+                    for i in to_remove[::-1]:
+                        futures.pop(i)
+
+        while len(futures) > 0:
+            future_copy = futures[:]
+            for future in as_completed(future_copy):
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"Error processing task: {e}")
+                    raise
+                    return False
+            with map_lock:
+                futures = futures[len(future_copy):]
+    return True
+        
+
 
 def compress(n: int = 1, retry: bool = False, compress_all: bool = False) -> bool:
-    bundles = compute_bundles(n, compress_all)
+    rev_list = git.query_rev_list(Configuration.RANGE_START, Configuration.RANGE_END)
+    rev_list = git.sort_commits(rev_list)
+    bundles = compute_bundles(rev_list, n, compress_all)
     for i, bundle in enumerate(bundles):
         bundle_id = bundle[0]
         print(f"Compressing bundle {i + 1} / {len(bundles)}")
@@ -274,8 +464,7 @@ def compile(commits: list[str], should_compress: bool = True, n: int = 1, retry_
     return signal_handler.SHOULD_EXIT or not should_compress or compress(n, retry_compress)
 
 
-def compute_bundles(n: int, compress_all: bool = False) -> list[list[str]]:
-    rev_list = git.query_rev_list(Configuration.RANGE_START, Configuration.RANGE_END)
+def compute_bundles(rev_list: list[str], n: int, compress_all: bool = False) -> list[list[str]]:
     compress_map = storage.read_compress_map()
     unbundled_versions = [rev for rev in rev_list if rev not in compress_map]
     ready_to_bundle = storage.get_unbundled_files()
@@ -309,6 +498,9 @@ def compute_bundles(n: int, compress_all: bool = False) -> list[list[str]]:
             bundles.append(bundle)
 
     return bundles
+
+
+
 
 
 def get_compiled_path() -> str:

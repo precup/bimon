@@ -117,12 +117,13 @@ bisect needs to handle its own error codes
   - 2 MacOS support
         Support storing folders instead of binaries
         Support running nested file
-  - 4 Optimize decompression times, redo bundles to match
-  - 8 zip mode
-        conversion command
+  - 12 zstd port
   13 Minor
-      3 Bugs
+      Bisect
       - 1 double check rev lists were meant to include start commit (bisect _rev_list only)
+      - 1 bisect:457 no more commits to test (expand range?)
+      - 1 bisect error codes
+      3 Bugs
       - 1 ctrl c jumps up by 1 and overwrites the bottom bar of the compiler output
       - 1 couldn't find that one MRP in the comments
       1 Arguments
@@ -130,17 +131,17 @@ bisect needs to handle its own error codes
       1 Input/Output
       - 1 256 color histogram support??
       8 Misc
-      - 1 bisect error codes
       - 1 cache before using so you don't have to reunpack on ctrl c
       - 1 Should more things fetch?
       --
-      - 1 bisect:457 no more commits to test (expand range?)
       - 1 export command
       - 1 keep track of a latest commit for repro instead of using the range?
       - 1 repro try to use the one from HEAD/currently in bin?
       --
       - 1 I don't love how the bundles are computed only based on the config range
       - 1 init should have a -y mode
+      - 1 backup_binary_name_regex
+      - 1 allow touching project.godot on projects without one
 
 6 Finishing touches
 - 1 Finalize requirements.txt
