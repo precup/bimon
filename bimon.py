@@ -24,7 +24,7 @@ def main() -> None:
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
     storage.init_storage()
     terminal.init_terminal()
-    # TODO signal_handler.install()   
+    signal_handler.install()   
     process_command_and_arguments()
 
 

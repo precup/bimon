@@ -27,6 +27,7 @@ executor = None
 needed_commits = {}
 needed_commits_lock = threading.Lock()
 from concurrent.futures import ThreadPoolExecutor, as_completed
+already_done = set(storage.read_compress_map(newmap=True).keys())
 
 def _extract_batch(commit, bundle_map):
     extracted = set()
@@ -40,11 +41,12 @@ def _extract_batch(commit, bundle_map):
                 if bundle_name in needed_commits:
                     extracted.update(needed_commits[bundle_name])
                     del needed_commits[bundle_name]
-            if extract_all:
-                for bundle_commit in bundle_map.get(commit, set()):
-                    loose_path = os.path.join(storage.VERSIONS_DIR, bundle_commit)
-                    if not os.path.exists(loose_path) and bundle_commit not in claimed_commits:
-                        extracted.add(bundle_commit)
+                if extract_all:
+                    print("golly gee wilkers im gonna extract em", len(bundle_map.get(bundle_name, set())))
+                    for bundle_commit in bundle_map.get(bundle_name, set()):
+                        loose_path = os.path.join(storage.VERSIONS_DIR, bundle_commit)
+                        if not bundle_commit in already_done and not os.path.exists(loose_path) and bundle_commit not in claimed_commits:
+                            extracted.add(bundle_commit)
             claimed_commits.update(extracted)
 
     if len(extracted) > 0:
@@ -83,11 +85,16 @@ def _extract_batch(commit, bundle_map):
             
 
 def _ex_fn(tup):
-    operation, arg1, arg2 = tup
-    if operation == "recompress":
-        _recompress_batch(arg1, arg2)
-    else:
-        _extract_batch(arg1, arg2)
+    try:
+        operation, arg1, arg2 = tup
+        if operation == "recompress":
+            _recompress_batch(arg1, arg2)
+        else:
+            _extract_batch(arg1, arg2)
+    except Exception as e:
+        with print_lock:
+            print(f"Error processing task: {e}")
+            raise
 
 
 def _recompress_batch(bundle, target_name):
@@ -124,10 +131,13 @@ def recompress(thread_count, bundle_size) -> bool:
     rev_list = git.query_rev_list(Configuration.RANGE_START, Configuration.RANGE_END)
     needs_recompress = {commit for commit in rev_list if commit not in new_compress_map}
     rev_list = git.sort_commits(needs_recompress, rev_list)
+    git.save_cache()
     bundles = []
     for i in range(0, len(rev_list) - bundle_size + 1, bundle_size):
         bundles.append(rev_list[i:i + bundle_size])
     bundles = [bundle for bundle in bundles if all(commit in old_compress_map or os.path.exists(os.path.join(storage.VERSIONS_DIR, commit)) for commit in bundle)]
+    print(sum(sum(1 for rev in bundle if not os.path.exists(os.path.join(storage.VERSIONS_DIR, rev))) for bundle in bundles), "commits to extract")
+    print(f"Recompressing {len(bundles)} bundles with {thread_count} threads.")
 
     with ThreadPoolExecutor(max_workers=thread_count) as exe:
         global executor, futures
@@ -157,8 +167,9 @@ def recompress(thread_count, bundle_size) -> bool:
                     continue
                 extractions.append(commit)
             
-            print(f"Extracting {len(extractions)} commits for bundle")
-
+            print(f"Extracting {len(extractions)} commits for bundle ({len(bundles)} bundles left)")
+            print(sum(sum(1 for rev in bundle if not os.path.exists(os.path.join(storage.VERSIONS_DIR, rev))) for bundle in bundles), "commits to extract after")
+    
             with map_lock:
                 with needed_commits_lock:
                     for commit in extractions:

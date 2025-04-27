@@ -78,6 +78,8 @@ def sort_commits(commits_to_sort: set[str], all_commits: list[str]) -> list[str]
     visited = set()
     sorted_commits = []
     for commit in all_commits[::-1]:
+        if commit not in commits_to_sort:
+            continue
         curr = commit
         while curr is not None and curr not in visited:
             visited.add(curr)
@@ -92,27 +94,28 @@ def get_similar_commit(target_commit: str, all_commits: list[str], possible_comm
 
     queue = []
     heapq.heappush(queue, (0, target_commit))
-    seen = set()
     best_per = {}
     best = None
     best_diff = -1
     while queue:
         total, curr = heapq.heappop(queue)
-        if curr in seen and curr in best_per and total >= best_per[curr]:
+        if curr in best_per and total > best_per[curr]:
             continue
-        seen.add(curr)
         best_per[curr] = total
-        if curr in possible_commits and curr not in not_possible_commits:
-            if best is None or total < best_diff:
-                best_diff = total
-                best = curr
+        if best is not None and total >= best_diff:
             continue
-        if best is not None and total > best_diff:
+        if curr in possible_commits and curr not in not_possible_commits:
+            best_diff = total
+            best = curr
             continue
         for neighbor in neighbors[curr]:
-            if neighbor not in seen:
-                diff = get_diff_size(curr, neighbor)
-                heapq.heappush(queue, (total + diff, neighbor))
+            diff = get_diff_size(curr, neighbor)
+            neighbor_total = total + diff
+            if best is not None and neighbor_total >= best_diff:
+                continue
+            if neighbor not in best_per or neighbor_total < best_per[neighbor]:
+                best_per[neighbor] = neighbor_total
+                heapq.heappush(queue, (neighbor_total, neighbor))
     return best
 
 

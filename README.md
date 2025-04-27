@@ -117,7 +117,11 @@ bisect needs to handle its own error codes
   - 2 MacOS support
         Support storing folders instead of binaries
         Support running nested file
-  - 12 zstd port
+  - 1 finish zstd conversion babysitting
+  - 1 clean up testing code
+  - 2 extraction should use zstd and return a folder
+  - 1 compression should use zstd
+  - 1 cut over to new compress map
   13 Minor
       Bisect
       - 1 double check rev lists were meant to include start commit (bisect _rev_list only)
@@ -142,6 +146,11 @@ bisect needs to handle its own error codes
       - 1 init should have a -y mode
       - 1 backup_binary_name_regex
       - 1 allow touching project.godot on projects without one
+      - 1 before executing
+    # try:
+    #     os.chmod(tar_output_file, os.stat(tar_output_file).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    # except:
+    #     pass
 
 6 Finishing touches
 - 1 Finalize requirements.txt
