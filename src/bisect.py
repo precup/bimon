@@ -1,6 +1,5 @@
 import os
 import shlex
-import stat
 import sys
 import time
 from math import log2
@@ -14,7 +13,7 @@ import src.terminal as terminal
 from src.config import Configuration
 
 
-def _unique_bads(bads: set[str]) -> set[str]:
+def _minimal_bads(bads: set[str]) -> set[str]:
     return set(
         commit for commit in bads 
         if all(
@@ -24,7 +23,7 @@ def _unique_bads(bads: set[str]) -> set[str]:
     )
 
 
-def _unique_goods(goods: set[str]) -> set[str]:
+def _minimal_goods(goods: set[str]) -> set[str]:
     return set(
         commit for commit in goods
         if all(
@@ -34,48 +33,56 @@ def _unique_goods(goods: set[str]) -> set[str]:
     )
 
 
-def _launch_any(commit: str, execution_parameters: str, cached_commits: set[str], discard: bool, cache_only: bool, wd: str = "") -> bool:
-    resolved = git.resolve_ref(commit)
-    if resolved != "":
-        commit = resolved
-    if commit in cached_commits:
-        return _launch_cached(commit, execution_parameters, wd)
-    
-    if cache_only:
-        print(f"Commit {git.get_short_name(commit)} is not cached. Skipping due to --cache-only.")
-        return False
-        
-    if not factory.compile_uncached(commit):
-        print(f"Failed to compile commit {git.get_short_name(commit)}.")
+def _find_executable(base_folder: str, likely_location: str, backup_path_regex: str) -> Optional[str]:
+    likely_location = os.path.join(base_folder, likely_location)
+    if os.path.exists(likely_location):
+        return likely_location
+
+    for root, _, files in os.walk(base_folder):
+        for file in files:
+            full_path = os.path.join(root, file)
+            if backup_path_regex.match(full_path):
+                return full_path
+
+    return None
+
+
+def _launch_any(ref: str, execution_parameters: str, present_versions: set[str], discard: bool, cache_only: bool, wd: str = "") -> bool:
+    commit = git.resolve_ref(ref)
+    if commit == "":
+        print(f"Invalid ref: \"{ref}\" could not be resolved.")
         return False
 
-    executable_path = factory.get_compiled_path()
-    result = False
-    try:
-        result = _launch(executable_path, execution_parameters, wd)
-    finally:
-        if not discard:
-            factory.cache()
-            cached_commits.add(commit)
-    return result
+    if commit not in present_versions:
+        if cache_only:
+            print(f"Commit {git.get_short_name(commit)} is not cached. Skipping due to --cached-only.")
+            return False
+            
+        if not factory.compile_uncached(commit):
+            print(f"Failed to compile commit {git.get_short_name(commit)}.")
+            return False
+
+        if discard:
+            return _launch(Configuration.WORKSPACE_PATH, execution_parameters, wd)
+        
+        factory.cache()
+        present_versions.add(commit)
+
+    return _launch_cached(commit, execution_parameters, wd)
 
 
 def _launch_cached(commit: str, execution_parameters: str, wd: str = "") -> bool:
-    executable_path = os.path.join(BisectRunner.TMP_DIR, Configuration.BINARY_NAME)
-    if os.path.exists(executable_path):
-        os.remove(executable_path)
-    if not storage.extract_commit(commit, executable_path):
+    if not storage.extract_commit(commit):
         print(f"Failed to extract commit {git.get_short_name(commit)}.")
         return False
-    return _launch(executable_path, execution_parameters, wd)
+    
+    return _launch(os.join(storage.VERSIONS_DIR, commit), execution_parameters, wd)
 
 
-def _launch(executable_path: str, execution_parameters: str, wd: str = "") -> bool:
-    try:
-        os.chmod(executable_path, os.stat(executable_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    except Exception as e:
-        print(e)
+def _launch(workspace_path: str, execution_parameters: str, wd: str = "") -> bool:
+    executable_path = _find_executable(workspace_path, Configuration.EXECUTABLE_PATH, Configuration.BACKUP_EXECUTABLE_REGEX)
     executable_path = str(Path(executable_path).resolve())
+
     return terminal.execute_in_subwindow(
         command=[executable_path] + shlex.split(execution_parameters),
         title="godot", 
@@ -86,8 +93,8 @@ def _launch(executable_path: str, execution_parameters: str, wd: str = "") -> bo
 
 
 class BisectRunner:
-    WARN_TIME = 60 * 60 * 24 * 7  # 1 week
-    TMP_DIR = "tmp"
+    WARN_TIME: int = 60 * 60 * 24 * 7  # 1 week
+    TMP_DIR: str = "tmp"
 
     def __init__(
             self, 
@@ -96,7 +103,11 @@ class BisectRunner:
             ignore_date: bool, 
             execution_parameters: str, 
             path_spec: str, 
-            issue_timestamp: int
+            issue_timestamp: int,
+            wd: str = "",
+            initial_goods: set[str] = set(),
+            initial_bads: set[str] = set(),
+            initial_skips: set[str] = set(),
         ) -> None:
         self._issue_timestamp = -1 if ignore_date else issue_timestamp
         self._path_spec = path_spec
@@ -104,47 +115,46 @@ class BisectRunner:
         self._cache_only = cache_only
         self._execution_parameters = execution_parameters
 
-        self._present_commits = storage.get_present_commits()
+        self._present_versions = storage.get_present_versions()
         self._ignored_commits = storage.get_ignored_commits()
         self._old_error_commits = set() if Configuration.IGNORE_OLD_ERRORS else storage.get_compiler_error_commits()
 
-        self._goods = set()
-        self._bads = set()
-        self._skips = set()
+        self._goods = set(initial_goods)
+        self._bads = set(initial_bads)
+        self._skips = set(initial_skips)
         self._started = False
         self._phase_two = False
         self._has_unstarted = False
+        self._wd = wd
 
-        rev_list = self._rev_list()
-        if len(rev_list) == 0:
+        commit_list = self._commit_list()
+        if len(commit_list) == 0:
             start_change_list = self._possibly_change_start_commit()
             if len(start_change_list) > 0:
-                rev_list = start_change_list
+                commit_list = start_change_list
             else:
                 no_spec_list = self._possibly_remove_path_spec()
                 if len(no_spec_list) > 0:
-                    rev_list = no_spec_list
+                    commit_list = no_spec_list
                 else:
+                    commit_list = []
                     print("Nothing to be done, then.")
+                    # TODO this is ugly
                     sys.exit(0)
         
-        self._current_revision = None
-        latest_present_commit = None
-        if len(self._present_commits) > 0:
-            for commit in rev_list[::-1]:
-                if commit in self._present_commits:
-                    self._current_revision = commit 
-                    latest_present_commit = commit
+        # TODO this should just use get_next_commit right?
+        self._current_commit = None
+        latest_present_version = None
+        if len(self._present_versions) > 0:
+            for commit in commit_list[::-1]:
+                if commit in self._present_versions:
+                    self._current_commit = commit 
+                    latest_present_version = commit
                     break
-        elif len(rev_list) > 0:
-            self._current_revision = rev_list[-1]
+        elif len(commit_list) > 0:
+            self._current_commit = commit_list[-1]
 
-        self._handle_time_warnings(rev_list, latest_present_commit)
-
-        try:
-            git.fetch()
-        except:
-            pass # it's just best effort to help resolve refs
+        self._handle_time_warnings(commit_list, latest_present_version)
         
         if not os.path.exists(BisectRunner.TMP_DIR):
             os.mkdir(BisectRunner.TMP_DIR)
@@ -152,42 +162,44 @@ class BisectRunner:
         storage.init_decompress_queue()
 
 
-    def _handle_time_warnings(self, rev_list: list[str], latest_present_commit: Optional[str]) -> None:
-        latest_known_time = git.get_commit_time(rev_list[-1])
-        time_since = time.time() - latest_known_time
-        if time_since > BisectRunner.WARN_TIME:
-            print(terminal.warn(f"The latest known commit is {int(time_since / 60 / 60 / 24)} days old."))
+    def _handle_time_warnings(self, commit_list: list[str], latest_present_version: Optional[str]) -> None:
+        if len(commit_list) > 0:
+            latest_known_time = git.get_commit_time(commit_list[-1])
+            time_since = time.time() - latest_known_time
+            if time_since > BisectRunner.WARN_TIME:
+                print(terminal.warn(f"The latest known commit is {int(time_since / 60 / 60 / 24)} days old."))
         
-        if latest_present_commit is None:
-            print(terminal.warn("No cached commits found in the range."))
+        if latest_present_version is None:
+            if len(commit_list) > 0:
+                print(terminal.warn("No cached version found in the range."))
             return
 
-        latest_present_time = git.get_commit_time(latest_present_commit)
+        latest_present_time = git.get_commit_time(latest_present_version)
         time_since = time.time() - latest_present_time
         if time_since > BisectRunner.WARN_TIME:
-            print(terminal.warn(f"The latest cached commit is {int(time_since / 60 / 60 / 24)} days old."))
-            if not self._cache_only:
+            print(terminal.warn(f"The latest cached version is {int(time_since / 60 / 60 / 24)} days old."))
+            if not self._cache_only and len(commit_list) > 0:
                 response = input("Would you like to compile the latest commit to initially test against instead? [y/N]: ").strip().lower()
                 if response.startswith("y"):
-                    self._current_revision = rev_list[-1]
+                    self._current_commit = commit_list[-1]
                     print("The latest commit will be compiled for testing before precompiled versions are used.")
 
 
     def _possibly_change_start_commit(self) -> list[str]:
-        print("No matching commits found going back to the start of the commit range.")
-        response = input("Would you like to set an earlier start commit? [y/N]: ").strip().lower()
+        print("No matching commits found going back to the start of the range.")
+        response = input("Would you like to set an earlier start point? [y/N]: ").strip().lower()
         if response.startswith("y"):
             while True:
-                new_start_commit = input("Enter a new start commit: ").strip()
-                if git.resolve_ref(new_start_commit) == "":
-                    print(f"Invalid commit: {new_start_commit}")
+                new_start_ref = input("Enter a new start point: ").strip()
+                if git.resolve_ref(new_start_ref) == "":
+                    print(f"Invalid commit: {new_start_ref}")
                     continue
-                Configuration.RANGE_START = new_start_commit
-                rev_list = self._rev_list()
-                if len(rev_list) > 0:
-                    return rev_list
-                print("No matching commits found going back to that commit, either.")
-                response = input("Would you like to try another start commit? [y/N]: ").strip().lower()
+                Configuration.RANGE_START = new_start_ref
+                commit_list = self._commit_list()
+                if len(commit_list) > 0:
+                    return commit_list
+                print("No matching commits found going back to that start point, either.")
+                response = input("Would you like to try another start point? [y/N]: ").strip().lower()
                 if not response.startswith("y"):
                     return []
         return []
@@ -195,7 +207,7 @@ class BisectRunner:
 
     def _possibly_remove_path_spec(self) -> list[str]:
         if self._path_spec != "":                
-            no_spec_list = self._rev_list(path_spec="")
+            no_spec_list = self._commit_list(path_spec="")
             if len(no_spec_list) > 0:
                 print("Perhaps your path spec is too restrictive.")
                 response = input("Would you like to continue without it? [y/N]: ")
@@ -206,7 +218,7 @@ class BisectRunner:
         return []
 
 
-    def _rev_list(
+    def _commit_list(
             self, 
             start: Optional[str] = None, 
             end: Optional[str] = None, 
@@ -221,7 +233,7 @@ class BisectRunner:
             path_spec = self._path_spec
         if before is None:
             before = self._issue_timestamp
-        return git.query_rev_list(
+        return git.get_commit_list(
             start, 
             end, 
             path_spec=path_spec, 
@@ -231,75 +243,73 @@ class BisectRunner:
 
     def print_exit_message(self) -> None:
         remaining = set(self.get_bisect_commits(self._goods, self._bads, dry_run=True))
-        temp_goods = _unique_goods(self._goods)
-        temp_bads = _unique_bads(self._bads)
         if len(remaining) == 1:
             bad_commit = next(remaining)
-            print("Only one revision left, must be " + git.get_short_name(bad_commit))
+            print("Only one commit left, must be " + git.get_short_name(bad_commit))
             print("https://github.com/godotengine/godot/commit/" + bad_commit)
             print(git.get_short_log(bad_commit))
+
         print("\nExiting bisect interactive mode.")
-        if len(remaining) > 0 and (len(temp_goods) > 0 or len(temp_bads) > 0 or len(self._skips) > 0):
-            print(f"There are {len(remaining)} remaining commits.")
-            print("You can resume with:")
-            if len(temp_goods) > 0:
-                print(f"good {' '.join(temp_goods)}")
-            if len(temp_bads) > 0:
-                print(f"bad {' '.join(temp_bads)}")
-            if len(self._skips) > 0:
-                print(f"skip {' '.join(self._skips)}")
+
+        if len(remaining) > 1:
+            if len(self._goods) > 0 and len(self._bads) > 0:
+                print(f"There are {len(remaining)} remaining possible commits.")
+            if len(self._goods | self._bads | self._skips) > 0:
+                print("You can resume with:")
+                self.print_resume_sets()
 
 
     def print_status_message(self, long: bool = False) -> None:
         remaining = set(self.get_bisect_commits(self._goods, self._bads, dry_run=True))
-        merged = set(remaining)
-        merged.update(_unique_bads(self._bads))
-        steps_left = int(log2(len(merged)))
-        if len(self._goods) == 0:
-            steps_left += 1
-        if len(self._bads) == 0:
-            steps_left += 1
+        steps_left = int(log2(len(remaining | _minimal_bads(self._bads))))
+        steps_left += len(self._goods) == 0
+        steps_left += len(self._bads) == 0
         print(f"Approximately {steps_left} tests remaining. Next commit to test:")
-        if self._current_revision is None:
-            print("No current revision set.")
+
+        if self._current_commit is None:
+            print("No current commit set.")
         else:
-            print(git.get_short_log(self._current_revision))
-        if long and (len(self._goods) > 0 or len(self._bads) > 0 or len(self._skips) > 0):
-            temp_goods = _unique_goods(self._goods)
-            temp_bads = _unique_bads(self._bads)
+            print(git.get_short_log(self._current_commit))
+
+        if long and len(self._goods | self._bads | self._skips) > 0:
             print("Minimal sets of marked commits:")
-            if len(temp_goods) > 0:
-                print(f"good {' '.join(temp_goods)}")
-            if len(temp_bads) > 0:
-                print(f"bad {' '.join(temp_bads)}")
-            if len(self._skips) > 0:
-                print(f"skip {' '.join(self._skips)}")
+            self.print_resume_sets()
+
+
+    def print_resume_sets(self) -> None:
+        for commit_set, name in [
+            (_minimal_goods(self._goods), "good"),
+            (_minimal_bads(self._bads), "bad"),
+            (self._skips, "skip"),
+        ]:
+            if len(commit_set) > 0:
+                commit_set = {git.get_short_name(commit) for commit in commit_set}
+                print(f"{name} {' '.join(git.get_short_name(commit) for commit in commit_set)}")
 
 
     def queue_decompress_nexts(self) -> None:
-        relevant_commits = []
+        to_decompress = []
         layers = Configuration.BACKGROUND_DECOMPRESSION_LAYERS
 
-        queue = [(self._current_revision, 0, set(), set())]
+        queue = [(self._current_commit, 0, set(), set())]
         while queue:
             current_commit, current_layer, inherited_goods, inherited_bads = queue.pop(0)
-
             if current_layer >= layers:
                 break
 
             new_goods = inherited_goods | {current_commit}
-            new_good_commit = self.get_next_revision(new_goods=new_goods, new_bads=inherited_bads)
-            if new_good_commit and new_good_commit not in relevant_commits:
-                relevant_commits.append(new_good_commit)
-                queue.append((new_good_commit, current_layer + 1, new_goods, inherited_bads))
+            good_next_commit = self.get_next_commit(new_goods=new_goods, new_bads=inherited_bads)
+            if good_next_commit is not None and good_next_commit not in to_decompress:
+                to_decompress.append(good_next_commit)
+                queue.append((good_next_commit, current_layer + 1, new_goods, inherited_bads))
 
             new_bads = inherited_bads | {current_commit}
-            new_bad_commit = self.get_next_revision(new_goods=inherited_goods, new_bads=new_bads)
-            if new_bad_commit and new_bad_commit not in relevant_commits:
-                relevant_commits.append(new_bad_commit)
-                queue.append((new_bad_commit, current_layer + 1, inherited_goods, new_bads))
+            bad_next_commit = self.get_next_commit(new_goods=inherited_goods, new_bads=new_bads)
+            if bad_next_commit is not None and bad_next_commit not in to_decompress:
+                to_decompress.append(bad_next_commit)
+                queue.append((bad_next_commit, current_layer + 1, inherited_goods, new_bads))
 
-        storage.set_decompress_queue(relevant_commits)
+        storage.set_decompress_queue(to_decompress)
 
 
     def dry_print(self, dry_run: bool, *args, **kwargs):
@@ -312,22 +322,22 @@ class BisectRunner:
         response = input("Would you like to set an earlier start commit? [y/N]: ").strip().lower()
         if response.startswith("y"):
             while True:
-                new_start_commit = input("Enter the new start commit: ").strip()
-                resolved = git.resolve_ref(new_start_commit)
-                if resolved == "":
-                    print(f"Invalid commit: {new_start_commit}")
+                new_start_ref = input("Enter the new start point: ").strip()
+                new_start_commit = git.resolve_ref(new_start_ref)
+                if new_start_commit == "":
+                    print(f"Invalid ref: {new_start_ref}")
                     continue
-                if resolved in self._bads:
-                    print(f"Invalid commit: {new_start_commit} is already marked as bad.")
+                if new_start_commit in self._bads:
+                    print(f"Invalid commit: {new_start_ref} is already marked as bad.")
                     continue
-                if any(git.is_ancestor(bad, resolved) for bad in self._bads):
-                    print(f"Invalid commit: {new_start_commit} is the descendant of a bad commit.")
+                if any(git.is_ancestor(bad, new_start_commit) for bad in self._bads):
+                    print(f"Invalid commit: {new_start_ref} is the descendant of a bad commit.")
                     continue
 
-                Configuration.RANGE_START = new_start_commit
-                rev_list = self._rev_list()
-                if len(rev_list) > 0:
-                    return rev_list
+                Configuration.RANGE_START = new_start_ref
+                commit_list = self._commit_list()
+                if len(commit_list) > 0:
+                    return commit_list
                 
                 print("No matching commits found going back to that commit, either.")
                 response = input("Would you like to try another start commit? [y/N]: ").strip().lower()
@@ -348,10 +358,11 @@ class BisectRunner:
                 self.dry_print(dry_run, "Perhaps the issue has already been fixed?")
                 return []
             self.dry_print(dry_run, "No bad commits found yet. Using the latest to try finding one.")
-            bisect_commits = self._rev_list()
+            bisect_commits = self._commit_list()
             for good in goods:
-                query_revs = set(self._rev_list(end=good))
-                bisect_commits = [commit for commit in bisect_commits if commit not in query_revs]
+                # TODO this could be done via arguments to the initial rev-list
+                commit_list = set(self._commit_list(end=good))
+                bisect_commits = [commit for commit in bisect_commits if commit not in commit_list]
             return bisect_commits
 
         elif len(goods) == 0:
@@ -365,10 +376,11 @@ class BisectRunner:
                 else:
                     return bisect_commits
             self.dry_print(dry_run, "No good commits found yet. Using early commits to try finding one.")
-            bisect_commits = self._rev_list()
+            bisect_commits = self._commit_list()
             for bad in bads:
-                query_revs = set(self._rev_list(end=bad))
-                bisect_commits = [commit for commit in bisect_commits if commit in query_revs]
+                # TODO this could be done via arguments to the initial rev-list
+                commit_list = set(self._commit_list(end=bad))
+                bisect_commits = [commit for commit in bisect_commits if commit in commit_list]
             return bisect_commits
 
         else:
@@ -376,7 +388,7 @@ class BisectRunner:
 
 
     # TODO some way to return exit vs continue
-    def get_next_revision(
+    def get_next_commit(
             self,
             new_goods: set[str] = set(),
             new_bads: set[str] = set(),
@@ -385,7 +397,7 @@ class BisectRunner:
             dry_run: bool = True,
         ) -> Optional[str]:
         if len(new_goods) == 0 and len(new_bads) == 0 and len(new_skips) == 0 and len(new_unmarks) == 0:
-            return self._current_revision
+            return self._current_commit
 
         temp_goods = set(self._goods)
         temp_bads = set(self._bads)
@@ -427,21 +439,21 @@ class BisectRunner:
             # TODO signal that it's time to stop?
         
         possible_next_commits = [commit for commit in bisect_commits if commit not in temp_skips]
-        possible_present_commits = [commit for commit in possible_next_commits if commit in self._present_commits]
+        possible_present_versions = [commit for commit in possible_next_commits if commit in self._present_versions]
         phase_zero = len(temp_goods) == 0 or len(temp_bads) == 0
         if dry_run:
             # TODO why is this no phase_zero? isn't that fine?
-            if not phase_zero and len(possible_present_commits) > 0:
-                possible_next_commits = possible_present_commits
+            if not phase_zero and len(possible_present_versions) > 0:
+                possible_next_commits = possible_present_versions
         elif not phase_zero:
             if self._phase_two:
-                if len(possible_present_commits) > 0:
+                if len(possible_present_versions) > 0:
                     print("Precompiled commits are back inside the possible range.")
                     print("Switching back to searching precompiled commits.")
                     self._phase_two = False
-                    possible_next_commits = possible_present_commits
-            elif len(possible_present_commits) > 0:
-                possible_next_commits = possible_present_commits
+                    possible_next_commits = possible_present_versions
+            elif len(possible_present_versions) > 0:
+                possible_next_commits = possible_present_versions
             else:
                 print("No more useful precompiled commits to test.")
                 if self._cache_only:
@@ -482,9 +494,9 @@ class BisectRunner:
         return possible_next_commits
 
 
-    def _get_sets_from_command(self, command: list[str]) -> (set[str], set[str], set[str], set[str]):
+    def _get_sets_from_command(self, command: list[str]) -> tuple[set[str], set[str], set[str], set[str]]:
         commands = ["good", "bad", "skip", "unmark"]
-        new_sets = {command[0]: set() for commands in commands}
+        new_sets = {command[0]: set() for command in commands}
 
         sentences = []
         sentence = [command[0]]
@@ -501,12 +513,16 @@ class BisectRunner:
 
         for sentence in sentences:
             if len(sentence) == 1:
-                if self._current_revision is None:
+                if self._current_commit is None:
                     print(f"Invalid command: {sentence[0]} has no arguments but there is no current commit to use.")
                     return (set(), set(), set(), set())
-                sentence.append(self._current_revision)
+                sentence.append(self._current_commit)
             sentence_key = sentence[0][0].lower()
-            commits = {git.resolve_ref(arg) for arg in sentence[1:]}
+            commits = {git.resolve_ref(ref) for ref in sentence[1:]}
+            for commit in commits:
+                if commit == "":
+                    print(f"Unresolvable ref(s): {" ".join(ref for ref in sentence[1:] if git.resolve_ref(ref) == "")}")
+                    return (set(), set(), set(), set())
             for key, value in new_sets.items():
                 if key != sentence_key and len(commits.intersection(value)) > 0:
                     print("Invalid command: Some commits were marked multiple times.")
@@ -514,7 +530,7 @@ class BisectRunner:
             new_sets[sentence_key].update(commits)
 
         already_marked = set()
-        for new_revisions, old_revisions in [
+        for new_commits, old_commits in [
             (self._goods, new_sets["bad"]),
             (self._goods, new_sets["skip"]),
             (self._bads, new_sets["good"]),
@@ -522,7 +538,7 @@ class BisectRunner:
             (self._skips, new_sets["good"]),
             (self._skips, new_sets["bad"]),
         ]:
-            already_marked.update(new_revisions.intersection(old_revisions))
+            already_marked.update(new_commits.intersection(old_commits))
         already_marked.difference_update(new_sets["unmark"])
         if len(already_marked) > 0:
             if len(sentences) > 1 or len(sentences[0]) > 2:
@@ -535,11 +551,12 @@ class BisectRunner:
 
     def _launch(self) -> bool:
         return _launch_any(
-            self._current_revision,
+            self._current_commit,
             self._execution_parameters,
-            self._present_commits,
+            self._present_versions,
             self._discard,
-            self._cache_only
+            self._cache_only,
+            self._wd,
         )
 
 
@@ -547,7 +564,7 @@ class BisectRunner:
         cmd = command[0].lower()
         args = command[1:]
 
-        # used letters: abeghlopqrsuv
+        # used letters: abeghlopqsu
         not_start = False
         if cmd == "s":
             if len(args) > 0:
@@ -561,9 +578,9 @@ class BisectRunner:
         elif "pause".startswith(cmd):
             self.autoopen_command(False)
         elif any(phrase.startswith(cmd) for phrase in ["good", "bad", "skip", "unmark"]):
-            next_revision = self.get_next_revision(*self._get_sets_from_command(command), dry_run=False)
-            if next_revision:
-                self._current_revision = next_revision
+            next_commit = self.get_next_commit(*self._get_sets_from_command(command), dry_run=False)
+            if next_commit is not None:
+                self._current_commit = next_commit
                 self.queue_decompress_nexts()
                 self.print_status_message()
                 if self._started:
@@ -601,7 +618,7 @@ class BisectRunner:
 
 
     def run(self) -> None:
-        if self._current_revision is None:
+        if self._current_commit is None:
             return
 
         print("Entering bisect interactive mode. Type 'help' for a list of commands.")
@@ -627,27 +644,27 @@ class BisectRunner:
         if on:
             prefix = "Starting automatic testing. " if not self._started else ""
             self._started = True
-            print(prefix + f"Launching {git.get_short_name(self._current_revision)}.")
+            print(prefix + f"Launching {git.get_short_name(self._current_commit)}.")
             return self._launch()
         else:
             self._started = False
 
 
-    def open_command(self, commit: Optional[str]) -> bool:
-        if commit is None:
-            if self._current_revision is None:
+    def open_command(self, ref: Optional[str]) -> bool:
+        if ref is None:
+            if self._current_commit is None:
                 print("Invalid command: No arguments were provided but there is no current commit to use.")
                 return False
-            commit = self._current_revision
-        resolved = git.resolve_ref(commit)
-        if resolved == "":
-            print(f"Invalid commit: {commit}")
+            ref = self._current_commit
+        commit = git.resolve_ref(ref)
+        if commit == "":
+            print(f"Invalid ref: {ref}")
             return False
-        if resolved in self._old_error_commits:
+        if commit in self._old_error_commits:
             print("Warning: That commit has had compiler errors in the past. Trying to open anyways.")
-        elif resolved in storage.get_ignored_commits():
+        elif commit in storage.get_ignored_commits():
             print("Warning: That commit is in ignored_commits. Trying to open anyways.")
-        self._current_revision = resolved
+        self._current_commit = commit
         self.queue_decompress_nexts()
         print("Opening commit", git.get_short_name(commit))
         return self._launch()
@@ -655,15 +672,15 @@ class BisectRunner:
 
     def list_command(self, short: bool) -> bool:
         if len(self._goods) == 0:
-            print("No good commits marked, can't calculate a revision list.")
+            print("No good commits marked, can't calculate a commit list.")
             return False
         elif len(self._bads) == 0:
-            print("No bad commits marked, can't calculate a revision list.")
+            print("No bad commits marked, can't calculate a commit list.")
             return False
 
         bisect_commits = git.get_bisect_commits(self._goods, self._bads)
         if short:
-            print(" ".join([git.get_plain_short_name(commit) for commit in bisect_commits]))
+            print(" ".join([git.get_short_name(commit, plain=True) for commit in bisect_commits]))
         else:
             if len(bisect_commits) == 0:
                 print("No possible commits found.")
@@ -675,21 +692,4 @@ class BisectRunner:
 
 
     def help_command(self, subcommand: Optional[str]) -> bool:
-        print("Marking commands:")
-        print("Marking commands may be combined on the same line.")
-        print("If no commits are provided to them, the current commit is used.")
-        print("  good [commit...]: Mark the given commit as good.")
-        print("  bad [commit...]: Mark the given commit as bad.")
-        print("  skip [commit...]: Mark the given commit as untestable.")
-        print("  unmark [commit...]: Unmark the given commit (in case you made a mistake).")
-        print()
-        print("Testing commands:")
-        print("  start: Automatically launch the next godot version to test.")
-        print("  pause: Stop automatically launching godot versions.")
-        print("  test [commit?]: Sets the current commit to. Launch the given commit to test. If no commit is given, the current commit is used.")
-        print("  list: List all commits.")
-        print("  visualize: Visualize the bisect process.")
-        print("  help: Show this help message. Use help [command] for more info on a specific command.")
-        print("  exit/quit: Exit bisect interactive mode.")
-        print("good, bad, skip, and unmark can be combined onto the same line.")
         return True

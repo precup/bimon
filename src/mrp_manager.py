@@ -9,10 +9,12 @@ import requests
 from bs4 import BeautifulSoup
 
 from src.config import Configuration, PrintMode
+import src.storage as storage
 
 ISSUES_URL = "https://github.com/godotengine/godot/issues/"
 MRP_FOLDER = "mrps"
-UNZIP_FOLDER = os.path.join("mrps", "unzip")
+TEMPORARY_ZIP = os.path.join(MRP_FOLDER, "temp-download-location.zip")
+UNZIP_FOLDER = os.path.join(MRP_FOLDER, "unzip-temp-directory")
 
 if not os.path.exists(MRP_FOLDER):
     os.mkdir(MRP_FOLDER)
@@ -48,7 +50,7 @@ def get_approx_issue_creation_time(issue: int) -> int:
     body_divs = soup.find_all('div', class_=re.compile('.*issue-body.*'))
     for div in body_divs:
         date_div = div.find('relative-time')
-        if date_div:
+        if date_div is not None:
             date_text = date_div.text.strip()
             try:
                 issue_day = datetime.strptime(date_text[3:], "%b %d, %Y")
@@ -64,23 +66,32 @@ def purge_all() -> int:
     if os.path.exists(MRP_FOLDER):
         for filename in os.listdir(MRP_FOLDER):
             if re.match(r'^\d+\.zip$', filename):
-                os.remove(os.path.join(MRP_FOLDER, filename))
+                storage.rm(os.path.join(MRP_FOLDER, filename))
                 if Configuration.PRINT_MODE == PrintMode.VERBOSE:
                     print(f"Deleted {filename}")
                 purge_count += 1
             elif re.match(r'^\d+$', filename):
-                shutil.rmtree(os.path.join(MRP_FOLDER, filename))
+                storage.rm(os.path.join(MRP_FOLDER, filename))
                 if Configuration.PRINT_MODE == PrintMode.VERBOSE:
                     print(f"Deleted {filename}")
                 purge_count += 1
 
     if os.path.exists(UNZIP_FOLDER):
-        shutil.rmtree(UNZIP_FOLDER)
+        storage.rm(UNZIP_FOLDER)
         if Configuration.PRINT_MODE == PrintMode.VERBOSE:
             print(f"Deleted {UNZIP_FOLDER}")
         purge_count += 1
 
     return purge_count
+
+
+def get_file_count(folder: str) -> int:
+    if not os.path.exists(folder):
+        return 0
+    file_count = 0
+    for root, _, files in os.walk(folder):
+        file_count += len(files)
+    return file_count
 
 
 def extract_mrp(zip_filename: str, issue_number: int) -> str:
@@ -102,7 +113,7 @@ def extract_mrp(zip_filename: str, issue_number: int) -> str:
         f.extractall(issue_mrp_folder)
 
     project_file = find_project_file(issue_mrp_folder)
-    if not project_file:
+    if project_file == "":
         print("MRP extraction failed, project.godot file not found in the extracted folder.")
         return ""
     update_project_title(project_file, issue_number)
@@ -159,7 +170,13 @@ def find_project_file(folder: str, silent: bool = False) -> str:
         return folder if os.path.exists(folder) else ""
     
     project_files = []
+    all_files_prefix = None
     for root, _, files in os.walk(folder):
+        if len(files) > 0:
+            if all_files_prefix is None:
+                all_files_prefix = root
+            else:
+                all_files_prefix = os.path.commonprefix([all_files_prefix, root])
         for file in files:
             if file == "project.godot":
                 project_files.append(os.path.join(root, file))
@@ -180,13 +197,21 @@ def find_project_file(folder: str, silent: bool = False) -> str:
         return project_files[int(choice)]
     elif len(project_files) == 1:
         return project_files[0]
-    return ""
+    print("No project.godot file found in the project folder.")
+    response = input("Would you like to create a new one? [Y/n]: ").strip().lower()
+    if response.startswith("n"):
+        return ""
+    else:
+        if all_files_prefix is None:
+            all_files_prefix = ""
+        return create_project_file(os.path.join(folder, all_files_prefix))
 
 
 def create_mrp(issue_number: int = -1) -> str:
     folder_name = os.path.join(MRP_FOLDER, f"{issue_number}")
     if issue_number < 0:
         folder_name = UNZIP_FOLDER
+
     if os.path.exists(folder_name):
         project_file = find_project_file(folder_name, True)
         if issue_number < 0 and project_file != "":
@@ -195,13 +220,17 @@ def create_mrp(issue_number: int = -1) -> str:
             if not response.startswith("n"):
                 return find_project_file(folder_name)
             print("Overwriting it with a new one.")
-        shutil.rmtree(folder_name)
-    os.mkdir(folder_name)
+        storage.rm(folder_name)
 
-    project_file = os.path.join(folder_name, "project.godot")
+    os.mkdir(folder_name)
+    return create_project_file(folder_name)
+
+
+def create_project_file(folder: str) -> str:
+    project_file = os.path.join(folder, "project.godot")
     with open(project_file, 'a'):
         os.utime(project_file, None)
-    update_project_title(project_file, issue_number)
+    update_project_title(project_file, folder)
     return project_file
 
 
@@ -227,6 +256,7 @@ def get_zip_links_from_issue(issue: int) -> tuple[list[str], int]:
 
 def download_zip(zip_link: str, filename: str) -> bool:
     print(f"Downloading zip file from {zip_link}")
+    storage.rm(filename)
 
     try:
         response = requests.get(zip_link, timeout=60)

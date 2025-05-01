@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -10,6 +11,7 @@ from typing import Optional
 
 import src.signal_handler as signal_handler
 from src.config import Configuration, PrintMode
+from src.storage import STATE_DIR
 
 if os.name == 'nt':
     from pyreadline3 import Readline
@@ -21,7 +23,7 @@ else:
 
 ADD_TO_HISTORY = os.name == 'nt'
 DEFAULT_OUTPUT_WIDTH = 80
-HISTORY_FILE = "history"
+HISTORY_FILE = os.path.join(STATE_DIR, "history")
 UNICODE_BAR_PARTS = " ▏▎▍▌▋▊▉█"
 C437_BAR_PARTS = " ▌█"
 HEIGHT_EIGHTHS = " ▁▂▃▄▅▆▇█"
@@ -150,9 +152,9 @@ def add_to_history(command: str) -> None:
 
 
 def get_cols() -> int:
-    if sys.stdin.isatty():
+    try:
         return os.get_terminal_size().columns
-    else:
+    except OSError:
         return DEFAULT_OUTPUT_WIDTH
 
 
@@ -172,13 +174,22 @@ def _execute_in_subwindow_pty(command: list[str], title: str, rows: int, cwd: Op
 
     while process.isalive():
         try:
-            stdout_chunk = process.read(4)
-            if stdout_chunk:
+            stdout_chunk = process.read(1024)
+            if len(stdout_chunk) > 0:
                 lines = stdout_chunk.split('\n')
+                if len(lines) == 1:
+                    old_lines = split_to_display_lines(output_lines[-1], cols)
+                    new_lines = split_to_display_lines(output_lines[-1] + lines[0], cols)
+                    if len(old_lines) == len(new_lines):
+                        output_lines[-1] += lines[0]
+                        print(ANSI_RESET + "\033[2K" + "".join(new_lines[-1][0]) + new_lines[-1][1], end="")
+                        sys.stdout.flush()
+                        continue
                 output_lines[-1] += lines[0]
                 output_lines += lines[1:]
             else:
                 time.sleep(0.1)
+                continue
         except EOFError:
             break
         
@@ -195,25 +206,35 @@ def _execute_in_subwindow_pty(command: list[str], title: str, rows: int, cwd: Op
             if eat_kill:
                 signal_handler.SHOULD_EXIT = False
                 process.kill(signal.SIGINT)
-            else:
+            elif not signal_handler.DYING:
                 should_exit = signal_handler.SHOULD_EXIT
                 bottom = box_bottom(bold=False, title=signal_handler.MESSAGE)
-                for _ in range(2):
-                    clear_line()
-                    move_rows_up(1)
-                clear_line()
+                move_rows_up(1)
+                print("", end="\r")
+                sys.stdout.flush()
+            else:
+                print()
 
-        move_rows_up(lines_printed)
-        lines_printed = len(window_lines) + 2
-        output = "\n".join(
+        prev_lines_printed = lines_printed
+        lines_printed = max(1, len(window_lines))
+        center = "\n".join(
             "\033[2K" + "".join(ansi_stack) + line_text 
             for ansi_stack, line_text in window_lines
         )
-        ansi_codes_seen.update({match.group() for match in ANSI_ESCAPE.finditer(output)})
-        output = ANSI_RESET + top + "\n" + output + ANSI_RESET + "\n" + bottom
-        print(output)
+        ansi_codes_seen.update({match.group() for match in ANSI_ESCAPE.finditer(center)})
+        output = (
+            (f"\033[{prev_lines_printed}A\r" if prev_lines_printed > 0 else "") + ANSI_RESET + top + "\n" 
+            + center + ANSI_RESET + "\n" 
+            + bottom + "\r\033[1A"
+        )
+        print(output, end="")
+        sys.stdout.flush()
+        time.sleep(5)
 
     process.wait()
+    move_rows_down(min(lines_printed, 2))
+    print("", end="\r")
+    sys.stdout.flush()
     # print("Ansicodes seen:", ansi_codes_seen)
     if process.exitstatus != 0:
         print("Dumping full process log because an error occurred:")
@@ -224,10 +245,16 @@ def _execute_in_subwindow_pty(command: list[str], title: str, rows: int, cwd: Op
 def execute_in_subwindow(command: list[str], title: str, rows: int, cwd: Optional[str] = None, eat_kill: bool = False) -> bool:
     if cwd == "":
         cwd = None
-    if len(command) > 0 and not os.path.exists(command[0]):
-        path_locator = shutil.which(command[0])
-        if path_locator:
-            command[0] = path_locator
+    if len(command) > 0:
+        if os.path.exists(command[0]):
+            try:
+                os.chmod(command[0], os.stat(command[0]).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            except:
+                pass
+        else:
+            path_locator = shutil.which(command[0])
+            if path_locator is not None:
+                command[0] = path_locator
 
     if Configuration.PRINT_MODE == PrintMode.LIVE:
         return _execute_in_subwindow_pty(command, title, rows, cwd, eat_kill)
@@ -242,7 +269,7 @@ def execute_in_subwindow(command: list[str], title: str, rows: int, cwd: Optiona
 
     if len(command) > 0 and not os.path.exists(command[0]):
         path_locator = shutil.which(command[0])
-        if path_locator:
+        if path_locator is not None:
             command[0] = path_locator
     process = subprocess.Popen(
         command,
@@ -258,7 +285,7 @@ def execute_in_subwindow(command: list[str], title: str, rows: int, cwd: Optiona
 def split_to_display_lines(text: str, columns: int) -> list[tuple[list[str], str]]:
     if text == "":
         return [([], "")]
-    # TODO do I care about re.match(r"\x1b\[\d+C", line)
+    # re.match(r"\x1b\[\d+C", line) happens sometimes too but I don't really care
     text = TELEPORT_RE.sub('\n', text)
     text = text.replace("\x1b[2J", "\x1b[2K")
     text = text.replace("\x1b[H", "\r")
@@ -397,6 +424,19 @@ def histogram_height(fractions: list[float]) -> str:
     return color_bg(output, Configuration.PROGRESS_BACKGROUND_COLOR)
 
 
+def blend_colors(color1: str, color2: str, fraction: float) -> str:
+    if "38;2" in color1 and "38;2" in color2:
+        color1 = color1.split(";")
+        color2 = color2.split(";")
+        r1, g1, b1 = int(color1[2]), int(color1[3]), int(color1[4])
+        r2, g2, b2 = int(color2[2]), int(color2[3]), int(color2[4])
+        r = int(r1 + (r2 - r1) * fraction)
+        g = int(g1 + (g2 - g1) * fraction)
+        b = int(b1 + (b2 - b1) * fraction)
+        return f"38;2;{r};{g};{b}"
+    return color1
+
+
 def histogram_color(fractions: list[float]) -> str:
     output = ""
     colors = Configuration.HEATMAP_COLORS
@@ -404,11 +444,13 @@ def histogram_color(fractions: list[float]) -> str:
         colors = ["white", "white"]
     elif len(colors) == 1:
         colors = [colors[0], colors[0]]
+    use_first = "38;2" in colors[0] and "38;2" in colors[1]
     for fraction in fractions:
-        color_index = int(max(min(1, fraction), 0) * (len(colors) - 2))
-        if fraction > 0:
+        color_index = max(min(1, fraction), 0) * (len(colors) - 1 - (0 if use_first else 1))
+        if fraction > 0 and not use_first:
             color_index += 1
-        output += color(C437_HEIGHT_PARTS[-1], colors[color_index])
+        bucket_color = blend_colors(colors[int(color_index)], colors[min(len(colors) - 1, int(color_index) + 1)], color_index % 1)
+        output += color(C437_HEIGHT_PARTS[-1], bucket_color)
     return output
 
 
@@ -477,8 +519,8 @@ def color_good(text: str) -> str:
     return color(text, Configuration.GOOD_COLOR)
 
 
-def color_rev(text: str) -> str:
-    return color(text, Configuration.COMMIT_COLOR)
+def color_ref(text: str) -> str:
+    return color(text, Configuration.REFERENCE_COLOR)
 
 
 def color_key(text: str) -> str:

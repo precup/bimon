@@ -1,27 +1,24 @@
 # Godot BiMon
-BiMon is a tool for speeding up bug triage for the Godot engine bugsquad. It has some nice convenience features, but the really major selling point is ability to precompile and cache godot binaries.
+BiMon is a tool for speeding up bug triage for the Godot engine bugsquad. It has some nice convenience features, but the main focus is its ability to precompile and cache godot binaries for use in later bisects.
 
-Compiling repeatedly during bisection is inefficient even on a fairly beefy computer. Even after optimizing my build time as much as I could, it still takes about 2 minutes for clean build. Bisecting from 4.0-stable to 4.5-dev1 takes about 14 bisections, which meant that bisecting a single bug involved upwards of 20 minutes of just waiting on compiles. 
+Compiling repeatedly during bisection is inefficient even on a fairly beefy computer. Even after optimizing my build time as much as I could, it still takes about 2 minutes for clean build. Bisecting from 4.4-stable to 4.5-dev1 takes about 10 bisections, which meant that bisecting a single bug involved about 15 minutes of just waiting on compiles. 
 
-For many bugs, actually checking whether a commit is good or bad once the project is built takes a matter of seconds, and even if compilation were 10x faster than on my machine it would still be a relatively large slowdown to my workflow.
+For many bugs, actually checking whether a commit is good or bad once the project is built takes a matter of seconds, and so even if compilation were 10x faster than on my machine it would still be a relatively large slowdown in the workflow.
 
-The answer is simple: precompile commits when you're not bisecting so you can skip that time when you are.
+The answer is straightforward: precompile commits when you're not bisecting so you can skip that time when you are.
 
 ### How many commits get precompiled?
-I recommend running the initial compilation stage in two passes. BiMon supports having only a subset of commits precompiled, and during bisection it will narrow down the range as much as possible using precompiled versions first. Then, it will begin to compile the commits and add them to the cache so they can be used as future search points.
-
-This means you could precompile just 1 in N commits and only need to do an average of log2(N) compilations for a bisect. Then, as a second pass, you precompile *every* version walking back from HEAD. Recommended values of N are 128 or 64.
-
-That said, if you're limited on some resource, running only 1 in N mode works fine.
+You can precompile every 1 in N commits or simply every commit across whatever ranges you choose. You can also mix and match the two as you like.
+I initially did a 1 in 128 pass to cut down the number of compiles a bit and then did a full pass from 4.5-dev1 back to 4.0-stable. The first pass produced ~120 versions, the second ~20,000 versions.
 
 ### What's the performance like?
-From 4.0-stable to 4.5-dev1, there are about 20k commits, so I'll be using that number in all my examples.
+Probably better than you expect. 
 
-At first, it seems absurd to compile and store 20k versions of Godot. However, there are a couple things working in our favor:
-- Incremental builds can save you a lot of time. 
-- Godot binaries have large amounts of overlap and compress well when stored with each other.
+To cover everything from 4.0-stable to 4.5-dev1 (the present at time of writing), you need 20,000 versions. Compiling and storing 20,000 versions of godot seems a bit ludicrous at first glance. However, there are a couple things working in our favor:
+- Very similar commits build very quickly
+- Godot binaries have large amounts of overlap and compress well when stored with each other, especially if they're for similar commits
 
-When I first started looking into this, my clean builds were taking 10 minutes. The current official Linux build is compressed to about 58 MB by itself. Multiplying those by 20k gives you 140 days and 1.2 TB, which spooked me. 
+When I first started looking into this, my clean builds were taking 10 minutes. The current official Linux build is compressed to about 58 MB by itself. Multiplying those by 20k gives you 140 days and 1.2 TB, basically unacceptable numbers. 
 
 After optimizing my build, my clean build takes 2 minutes, my incremental builds average 45 seconds, and the binaries compress to an average of 13 MB each. Multiplying those by 20k gives you 10 days and 260 GB, large but not unmanageable numbers.
 
@@ -97,84 +94,83 @@ Passing `--cached-only` prevents the second phase entirely and prevents ever com
 
 The intended workflow to bisect an issue is to get an MRP, run `bimon.py bisect MRP_PATH`, enter any versions listed in the issue using `good` or `bad`, and then run `start`.
 
-Once the editor opens, you should attempt to reproduce the bug. Then, either hit the MARK_GOOD or MARK_BAD hotkeys or switch back to your terminal and submit `g` or `b`. Repeat with each new editor that opens. 
+Once the editor opens, 
+you should attempt to reproduce the bug. Then, either hit the MARK_GOOD or MARK_BAD hotkeys or switch back to your terminal and submit `g` or `b`. Repeat with each new editor that opens. 
 
 ### TODO
 
-bisect:340 no more commits to test (expand range?)
+Known Issues
+scons wants a clean build sometimes, hard to detect when
 
-src/bisect.py:185:            sys.exit(1)
-src/bisect.py:222:        sys.exit(1)
-src/bisect.py:250:                sys.exit(0)
-src/bisect.py:253:            sys.exit(0)
-src/bisect.py:536:            sys.exit(0)
-src/mrp_manager.py:32:            sys.exit(1)
-src/mrp_manager.py:212:            sys.exit(1)
-bisect needs to handle its own error codes
+Major chunks
+    3 Repro update
+    9 Bisect update
+    6 Improved MRP handling
+    8 Side memes
 
-27 Functional
-  14 Major
-  - 2 MacOS support
-        Support storing folders instead of binaries
-        Support running nested file
-  - 1 finish zstd conversion babysitting
-  - 1 clean up testing code
-  - 2 extraction should use zstd and return a folder
-  - 1 compression should use zstd
-  - 1 cut over to new compress map
-  13 Minor
-      Bisect
-      - 1 double check rev lists were meant to include start commit (bisect _rev_list only)
-      - 1 bisect:457 no more commits to test (expand range?)
-      - 1 bisect error codes
-      3 Bugs
-      - 1 ctrl c jumps up by 1 and overwrites the bottom bar of the compiler output
-      - 1 couldn't find that one MRP in the comments
-      1 Arguments
-      - 1 add initial range argument to bisect, automarks as good and bad respectively
-      1 Input/Output
-      - 1 256 color histogram support??
-      8 Misc
-      - 1 cache before using so you don't have to reunpack on ctrl c
-      - 1 Should more things fetch?
-      --
-      - 1 export command
-      - 1 keep track of a latest commit for repro instead of using the range?
-      - 1 repro try to use the one from HEAD/currently in bin?
-      --
-      - 1 I don't love how the bundles are computed only based on the config range
-      - 1 init should have a -y mode
-      - 1 backup_binary_name_regex
-      - 1 allow touching project.godot on projects without one
-      - 1 before executing
-    # try:
-    #     os.chmod(tar_output_file, os.stat(tar_output_file).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    # except:
-    #     pass
+28 - TODO
+  6 MRPs
+  - couldn't find that one MRP in the comments
+  - export command
+  - MRP with arbitrary name
+  - support adamscott's use case
+  - purge selectors like download only for mrps?
+  - support calinou's PR testing workflow
+  9 Bisect
+  - bisect error codes need to get added potentially?
+  - handle unresolveable refs better
+  - self._current_revision can be None if initial range doesn't exist
+  - handle a lack of initial range better
+  - bisect initial commit marking via project_or_issue, improve commit sha detection
+  - bisect TODOs
+  - selection of default start and end for bisect kind of sucks
+  - ?autopurge during bisects
+  - initial bisect arguments bypass error checking as currently written
+  2 Repro/Bisect
+  - does the execution_parameters working directory stuff still work properly, especially allowing -p with no project?
+  - parse_flexible_args overhaul
+  2 Repro
+  - ?decide on a better default for repro commit (HEAD? latest compiled?
+  - Calls _launch_any directly
+  2 Git
+  - should probably fetch only if a ref fails to resolve that we get from the user on some commands
+  - resolve ref also fails for ambiguous refs
+  2 Output
+  - final lines of scons output don't seem to print
+  - check that the time estimates include caching and not just compile time, maybe add compression time?
+  4 Misc
+  - launch should use a temporary directory for the wd if none is provided
+  - file paths relative to original not current!!!
+    repro/bisect --project
+  - compiles seem to be slower than before, is greedy bad in practice?
+  - Package the existing 2000 commits optimally
 
-6 Finishing touches
+
+7 Finishing touches
 - 1 Finalize requirements.txt
+    - Windows
+        Needed to manually install pyreadline3, pywinpty
 - 2 Better output, colors, text decorations?
 - 1 progress bar feels a bit cluttered
-- 1 update started further back than it should retest
 - 1 check that get_commit_time gets the right commit time
+- 1 make precache file
 
 Clean up
 - Code clean up pass
-- Repo organization pass
+- Code file organization pass
 - Run a linter
-- Use correct ref/rev for git stuff
-- Consistent use of is not None vs truthiness
 - Consistent use of _ prefixes
+- Global variables
+- VERSIONS_DIR gets used in too many places, same with other DIRS
+- update bisect command completer
+- revisit command names
+- class vs not
 
 Testing
-- General
-- Windows
-      Needed to manually install pyreadline3, pywinpty
-      can't scroll while subcommand is printing
 
 Documentation
 - Write README.md
+    Add note about fetching
 - Write main help command
     defaults don't show up properly in help
 - Update argparser help strings
@@ -191,3 +187,4 @@ Maybe someday
 - Fullscreen update mode?
 - Terminal window resizing support?
 - Find commits mentioned in the issue?
+- Minor formatting issues on SIGINT while in live mode

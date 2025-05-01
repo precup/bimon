@@ -1,20 +1,19 @@
-import lzma
 import os
 import shutil
-import stat
 import tarfile
-import zipfile
-
 from pathlib import Path
 
-import src.git as git
+from pyzstd import CParameter, DParameter, ZstdFile
 
+import src.git as git
+from src.config import Configuration
 from src.pooled_executor import PooledExecutor
 
+VERSIONS_DIR = "versions"
+STATE_DIR = "state"
 IGNORE_FILE = "ignored_commits"
 COMPILE_ERROR_FILE = "compile_error_commits"
-COMPRESS_MAP = "compress_map"
-VERSIONS_DIR = "versions"
+BUNDLE_MAP_FILE = os.path.join(STATE_DIR, "bundle_map")
 
 _use_decompress_queue = False
 _decompress_queue = None
@@ -23,94 +22,101 @@ _decompress_queue = None
 def init_storage() -> None:
     if not os.path.exists(VERSIONS_DIR):
         os.mkdir(VERSIONS_DIR)
-    if not os.path.exists(COMPRESS_MAP):
-        Path(COMPRESS_MAP).touch()
-    if not os.path.exists(NEW_COMPRESS_MAP):
-        Path(NEW_COMPRESS_MAP).touch()
 
 
 def init_decompress_queue() -> None:
     global _use_decompress_queue, _decompress_queue
-    if not _use_decompress_queue:
+    if not _use_decompress_queue and Configuration.BACKGROUND_DECOMPRESSION_LAYERS > 0:
         _decompress_queue = PooledExecutor(
-            task_fn=_extract_commit, pool_size=2
+            task_fn=_extract_version, pool_size=Configuration.EXTRACTION_POOL_SIZE
         )
         _use_decompress_queue = True
 
 
-def set_decompress_queue(commits: list[str]) -> None:
+def set_decompress_queue(versions: list[str]) -> None:
     if not _use_decompress_queue:
         return
     _decompress_queue.enqueue_tasks(
-        [(commit, (commit,)) for commit in commits]
+        [(version, (version,)) for version in versions]
     )
 
 
-def write_compress_map(compress_map: dict[str, str]) -> None:
-    with open(COMPRESS_MAP, "w") as f:
-        for key, value in compress_map.items():
-            f.write(f"{key}\n{value}\n")
+def write_bundle_map(bundle_map: dict[str, str]) -> None:
+    with open(BUNDLE_MAP_FILE, "w") as f:
+        for version, bundle_id in bundle_map.items():
+            f.write(f"{version}\n{bundle_id}\n")
 
 
-def read_compress_map() -> dict[str, str]:
-    if not os.path.exists(COMPRESS_MAP):
+def read_bundle_map() -> dict[str, str]:
+    if not os.path.exists(BUNDLE_MAP_FILE):
         return {}
-    with open(COMPRESS_MAP, "r") as f:
+    with open(BUNDLE_MAP_FILE, "r") as f:
         lines = f.readlines()
-        compress_map = {}
+        bundle_map = {}
         for i in range(0, len(lines), 2):
-            key = lines[i].strip()
-            value = lines[i + 1].strip()
-            compress_map[key] = value
-    return compress_map
+            version = lines[i].strip()
+            bundle_id = lines[i + 1].strip()
+            bundle_map[version] = bundle_id
+    return bundle_map
 
 
-def add_to_compress_map(commit: str, location: str) -> None:
-    compress_map = read_compress_map()
-    compress_map[commit] = location
-    write_compress_map(compress_map)
+def add_to_bundle_map(version: str, location: str) -> None:
+    bundle_map = read_bundle_map()
+    bundle_map[version] = location
+    write_bundle_map(bundle_map)
 
 
-def get_present_commits() -> set[str]:
-    return set(
-        [version for version in os.listdir(VERSIONS_DIR) if '.' not in version]
-        + list(read_compress_map().keys())
+def get_present_versions() -> set[str]:
+    return (
+        {version for version in os.listdir(VERSIONS_DIR) if git.resolve_ref(version) == version}
+        | set(read_bundle_map().keys())
     )
 
 
-def extract_commit(commit: str, target: str = "") -> bool:
+def rm(path: str) -> None:
+    if os.path.exists(path):
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
+
+
+def extract_version(version: str, target: str = "") -> bool:
     if _use_decompress_queue:
-        _decompress_queue.enqueue_and_wait([(commit, (commit,))])
-    return _extract_commit(commit, target)
+        _decompress_queue.wait_for(version)
+    return _extract_version(version, target)
 
 
-def _extract_commit(commit: str, desired_files: set[str], wd = "") -> bool:
-    if wd == "":
-        wd = VERSIONS_DIR
-    
-    bundle_id = read_compress_map().get(commit)
-    if not bundle_id:
-        print(f"Extraction failed, commit {commit} not found in storage.")
-        return False
+def _extract_version(version: str, target: str) -> bool:
+    version_path = os.path.join(VERSIONS_DIR, version)
+    if not os.path.exists(version_path):
+        bundle_id = read_bundle_map().get(version)
+        if bundle_id is None:
+            print(f"Extraction failed, version {version} not found in storage.")
+            return False
 
-    return extract_with_zstd(os.path.join(VERSIONS_DIR, bundle_id), commit, wd)
+        if not extract_with_zstd(os.path.join(VERSIONS_DIR, bundle_id), version, VERSIONS_DIR):
+            return False
+    if target != "" and target != version_path:
+        shutil.copytree(version_path, target, dirs_exist_ok=True)
+    return True
 
 
-def purge_duplicate_files(protected_commits: set[str]) -> int:
+def purge_duplicate_files(protected_versions: set[str] = set()) -> int:
     purge_count = 0
-    compress_map = read_compress_map()
-    for path in os.listdir(VERSIONS_DIR):
-        if path in compress_map and path not in protected_commits:
-            os.remove(os.path.join(VERSIONS_DIR, path))
+    bundle_map = read_bundle_map()
+    for version in os.listdir(VERSIONS_DIR):
+        if version in bundle_map and version not in protected_versions:
+            rm(os.path.join(VERSIONS_DIR, version))
             purge_count += 1
     return purge_count
 
 
-import tarfile
-from pyzstd import CParameter, DParameter, ZstdFile
-
-
 class ZstdTarFile(tarfile.TarFile):
+    # These are extremely carefully tuned and should only be
+    # touched if you know what you're doing or are running out
+    # of RAM. Dropping windowLog by 1 or 2 if you're low on RAM
+    # isn't the end of the world. 
     BASE_COPTIONS = {
         CParameter.compressionLevel: 1,
         CParameter.nbWorkers: 0,
@@ -144,22 +150,15 @@ class ZstdTarFile(tarfile.TarFile):
 
 
 def compress_with_zstd(folders: list[str], output_path: str) -> bool:
-    if os.path.exists(output_path):
-        os.remove(output_path)
-    try:
-        with ZstdTarFile(output_path, mode="w") as tar:
-            for folder in folders:
-                folder = os.path.abspath(folder)
-                tar.add(folder, arcname=os.path.basename(folder))
-        return True
-    except Exception as e:
-        print(f"Compression failed with error: {e}")
-        return False
+    paths = {
+        os.path.abspath(folder): os.path.basename(folder)
+        for folder in folders
+    }
+    return compress_with_zstd_by_name(paths, output_path)
 
 
 def compress_with_zstd_by_name(paths: dict[str, str], output_path: str) -> bool:
-    if os.path.exists(output_path):
-        os.remove(output_path)
+    rm(output_path)
     try:
         with ZstdTarFile(output_path, mode="w") as tar:
             for input_path, arcname in paths.items():
@@ -170,21 +169,19 @@ def compress_with_zstd_by_name(paths: dict[str, str], output_path: str) -> bool:
         return False
 
 
-def extract_with_zstd(archive_path: str, file_prefix: str, target_dir: str) -> bool:
-    global num_possible
-    if not os.path.exists(archive_path):
-        print(f"Archive {archive_path} does not exist.")
+def extract_with_zstd(bundle_path: str, file_prefix: str, output_dir: str) -> bool:
+    if not os.path.exists(bundle_path):
+        print(f"Archive {bundle_path} does not exist.")
         return False
-    num_possible = 0
+    extracted = []
     def path_filter(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo:
         if member.name.startswith(file_prefix):
-            global num_possible
-            num_possible += 1
+            extracted.append(member.name)
             return tarfile.data_filter(member, path)
         return None
-    with ZstdTarFile(archive_path, mode="r") as tar:
-        tar.extractall(target_dir, filter=path_filter)
-    if num_possible > 0:
+    with ZstdTarFile(bundle_path, mode="r") as tar:
+        tar.extractall(output_dir, filter=path_filter)
+    if len(extracted) > 0:
         return True
     print(f"File {file_prefix} not found in archive.")
     return False
@@ -193,32 +190,36 @@ def extract_with_zstd(archive_path: str, file_prefix: str, target_dir: str) -> b
 def compress_bundle(bundle_id: str, bundle: list[str]) -> bool:
     bundle_path = os.path.join(VERSIONS_DIR, bundle_id)
     if os.path.exists(bundle_path):
-        valid_bundles = read_compress_map().values()
+        valid_bundles = read_bundle_map().values()
         if bundle_id in valid_bundles:
             print(f"Bundle {bundle_id} already exists. Skipping.")
             return False
         print("Bundle already exists but is invalid, removing and rebuilding.")
-        os.remove(bundle_path)
-    commit_paths = [os.path.join(VERSIONS_DIR, commit) for commit in bundle]
+        rm(bundle_path)
+
+    version_paths = [os.path.join(VERSIONS_DIR, version) for version in bundle]
     try:
-        compress_with_zstd(commit_paths, bundle_path)
+        compress_with_zstd(version_paths, bundle_path)
     except Exception as e:
         print(f"Compressing bundle {bundle_id} failed with error: {e}")
-        print(bundle_path, commit_paths)
+        print(bundle_path, version_paths)
         return False
 
-    for commit, commit_path in zip(bundle, commit_paths):
-        add_to_compress_map(commit, bundle_id)
-        if os.path.exists(commit_path):
-            os.remove(commit_path)
+    bundle_map = read_bundle_map()
+    for version, version_path in zip(bundle, version_paths):
+        bundle_map[version] = bundle_id
+    write_bundle_map(bundle_map)
+
+    for version_path in version_paths:
+        rm(version_path)
     return True
 
 
-def get_unbundled_files() -> list[str]:
-    compress_map = read_compress_map()
+def get_unbundled_versions() -> list[str]:
+    bundle_map = read_bundle_map()
     return [
         path for path in os.listdir(VERSIONS_DIR) 
-        if path not in compress_map and git.resolve_ref(path) == path
+        if path not in bundle_map and git.resolve_ref(path) == path
     ]
 
 
@@ -250,3 +251,9 @@ def add_compiler_error_commits(commits: list[str]) -> None:
     with open(COMPILE_ERROR_FILE, "a") as f:
         for commit in new_errors:
             f.write(f"{commit}\n")
+
+
+def resolve_relative_to(path: str, wd: str) -> str:
+    if os.path.isabs(path):
+        return path
+    return os.path.join(wd, path)

@@ -31,7 +31,6 @@ import socket
 import threading
 import time
 
-# Local imports
 from winpty.winpty import PTY
 from winpty import PtyProcess as PtyProcessSource
 
@@ -61,8 +60,7 @@ class PtyProcess(PtyProcessSource):
         self._server.listen(1)
 
         # Read from the pty in a thread.
-        self._thread = threading.Thread(target=_read_in_thread,
-            args=(address, self.pty, self.read_blocking))
+        self._thread = threading.Thread(target=_read_in_thread, args=(address, self.pty))
         self._thread.daemon = True
         self._thread.start()
 
@@ -70,15 +68,16 @@ class PtyProcess(PtyProcessSource):
         self.fd = self.fileobj.fileno()
 
 
-def _read_in_thread(address, pty, blocking):
+def _read_in_thread(address, pty):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
         client.connect(address)
 
         while pty.isalive():
             try:
                 data = pty.read(4096, blocking=False)
-                if data:
+                if len(data) == 0:
+                    time.sleep(0.1)
+                else:
                     client.send(bytes(data, 'utf-8'))
             except Exception as e:
                 break
-            time.sleep(1e-3)

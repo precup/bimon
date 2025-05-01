@@ -2,96 +2,114 @@ import functools
 import os
 import shlex
 import subprocess
-from collections import deque
+from collections import deque, defaultdict
+from typing import Optional
 import heapq
 
 import src.terminal as terminal
 from src.config import Configuration
+from src.storage import STATE_DIR
 
-CACHE_NAME = "git_cache"
-# TODO precache loading is kinda inefficient
-PRECACHE_NAME = "git_precache"
+CACHE_NAME = os.path.join(STATE_DIR, "git_cache")
+PRECACHE_NAME = os.path.join(STATE_DIR, "git_precache")
 
 _commit_time_cache = {}
-_parent_cache = {}
+_neighbor_cache = {}
 _diff_cache = {}
 _diff_precache = {}
+_already_fetched = False
+_cache_loaded = True
 
 
 def load_cache() -> None:
+    _load_cache(PRECACHE_NAME)
+    _load_cache(CACHE_NAME)
+    global _cache_loaded
+    _cache_loaded = True
+
+
+def _load_cache(cache_file_name: str) -> None:
     try:
-        with open(CACHE_NAME, "r") as cache_file:
-            segment = 0
+        with open(cache_file_name, "r") as cache_file:
+            section = 0
             for line in cache_file:
                 if line.startswith("#"):
-                    segment += 1
+                    section += 1
                     continue
                 parts = line.strip().split()
-                if segment == 0:
+                if section == 0:
                     _commit_time_cache[parts[0]] = int(parts[1])
-                elif segment == 1:
-                    src, dst = parts[0], parts[1]
-                    if src > dst:
-                        src, dst = dst, src
-                    if src not in _diff_cache:
-                        _diff_cache[src] = {}
-                    _diff_cache[src][dst] = int(parts[2])
-                elif segment == 2:
-                    _parent_cache[parts[0]] = set(parts[1:])
+                elif section == 1:
+                    src_commit, dst_commit = parts[0], parts[1]
+                    if src_commit > dst_commit:
+                        src_commit, dst_commit = dst_commit, src_commit
+                    if src_commit not in _diff_cache:
+                        _diff_cache[src_commit] = {}
+                    _diff_cache[src_commit][dst_commit] = int(parts[2])
+                elif section == 2:
+                    _neighbor_cache[parts[0]] = set(parts[1:])
     except FileNotFoundError:
         pass
 
-load_cache()
 
 def save_cache() -> None:
+    if not _cache_loaded:
+        return
     with open(CACHE_NAME, "w") as cache_file:
         for commit, timestamp in _commit_time_cache.items():
             cache_file.write(f"{commit} {timestamp}\n")
         cache_file.write("#\n")
-        for src, val in _diff_cache.items():
-            for dst, size in val.items():
-                cache_file.write(f"{src} {dst} {size}\n")
+        for src_commit, dsts in _diff_cache.items():
+            for dst_commit, size in dsts.items():
+                cache_file.write(f"{src_commit} {dst_commit} {size}\n")
         cache_file.write("#\n")
-        for commit, parents in _parent_cache.items():
-            cache_file.write(f"{commit} {' '.join(parents)}\n")
+        for commit, neighbors in _neighbor_cache.items():
+            cache_file.write(f"{commit} {' '.join(neighbors)}\n")
 
 
-def get_neighbors(all_commits: list[str]) -> dict[str, set[str]]:
-    # TODO can this get_parents call be batched?
-    neighbors = {
-        commit: get_parents(commit) for commit in all_commits
-    }
-    for commit in neighbors:
-        to_remove = set()
-        for neighbor in neighbors[commit]:
-            if neighbor in neighbors:
-                neighbors[neighbor].add(commit)
-            else:
-                to_remove.add(neighbor)
-        neighbors[commit] -= to_remove
-    return neighbors
+def update_neighbors(commits: Optional[set[str]] = None) -> None:
+    neighbors = defaultdict(set)
+    if commits is None or any(commit not in _neighbor_cache for commit in commits):
+        lines = get_git_output(["rev-list", "--parents", "--all"]).splitlines()
+        lines += get_git_output(["rev-list", "--children", "--all"]).splitlines()
+        for line in lines:
+            parts = line.split()
+            neighbors[parts[0]].update(set(parts[1:]))
+
+        for commit in neighbors:
+            _neighbor_cache[commit] = neighbors[commit]
+        
+        save_cache()
 
 
-def sort_commits(commits_to_sort: set[str], all_commits: list[str]) -> list[str]:
-    neighbors = get_neighbors(all_commits)
-    save_cache()
+def get_bulk_neighbors(all_commits: list[str]) -> dict[str, set[str]]:
+    update_neighbors(set(all_commits))
+    return {commit: _neighbor_cache[commit] for commit in all_commits}
+
+
+def get_neighbors(commit: str) -> set[str]:
+    update_neighbors([commit])
+    return _neighbor_cache[commit]
+
+
+def sort_commits(commits_to_sort: list[str]) -> list[str]:
+    possible_commits = set(commits_to_sort)
     visited = set()
     sorted_commits = []
-    for commit in all_commits[::-1]:
-        if commit not in commits_to_sort:
-            continue
+    for commit in commits_to_sort:
         curr = commit
         while curr is not None and curr not in visited:
-            visited.add(curr)
+            possible_commits.remove(curr)
             sorted_commits.append(curr)
-            curr = get_similar_commit(curr, all_commits, commits_to_sort, neighbors, visited)
+            curr = get_similar_commit(curr, possible_commits, visited)
     return sorted_commits
 
 
-def get_similar_commit(target_commit: str, all_commits: list[str], possible_commits: set[str], neighbors: dict[str, set[str]] = {}, not_possible_commits: set[str] = set()) -> str:
-    if neighbors == {}:
-        neighbors = get_neighbors(all_commits)
-
+def get_similar_commit(target_commit: str, possible_commits: set[str]) -> str:
+    # Performs a Dijkstra-like search to find the commit with the smallest diff size
+    # to the target commit, excluding the commits in exclude_commits. Uses the diffs
+    # between commits as the edge weights, which may overestimate the distance, but
+    # it gets results within a few percent of optimal on godot.
     queue = []
     heapq.heappush(queue, (0, target_commit))
     best_per = {}
@@ -104,11 +122,11 @@ def get_similar_commit(target_commit: str, all_commits: list[str], possible_comm
         best_per[curr] = total
         if best is not None and total >= best_diff:
             continue
-        if curr in possible_commits and curr not in not_possible_commits:
+        if curr in possible_commits:
             best_diff = total
             best = curr
             continue
-        for neighbor in neighbors[curr]:
+        for neighbor in get_neighbors(curr):
             diff = get_diff_size(curr, neighbor)
             neighbor_total = total + diff
             if best is not None and neighbor_total >= best_diff:
@@ -132,8 +150,10 @@ def check_out(rev: str) -> None:
 
 
 def fetch() -> None:
+    global _already_fetched
     get_git_output(["fetch", "--tags", "--prune", "origin"])
     cache_clear()
+    _already_fetched = True
 
 
 def get_git_output(args: list[str]) -> str:
@@ -146,91 +166,87 @@ def get_git_output(args: list[str]) -> str:
         return ""
 
 
-def get_commit_time(commit: str) -> int:
-    if commit in _commit_time_cache:
-        return _commit_time_cache[commit]
-    try:
-        retval = int(get_git_output(["show", "-s", "--format=%ct", commit]))
-    except:
-        retval = -1
-    _commit_time_cache[commit] = retval
-    return retval
+def get_commit_time(ref: str) -> int:
+    commit = resolve_ref(ref)
+    if commit not in _commit_time_cache:
+        try:
+            time_output = get_git_output(["show", "-s", "--format=%ct", commit])
+            _commit_time_cache[commit] = int(time_output)
+        except:
+            return -1
+    return _commit_time_cache[commit]
 
 
-def get_commit_times(commits: list[str]) -> dict[str, int]:
-    result = {
-        commit: _commit_time_cache[commit] for commit in commits
-        if commit in _commit_time_cache
+def get_commit_times(refs: list[str]) -> dict[str, int]:
+    ref_commits = {
+        ref: resolve_ref(ref) for ref in refs
     }
-    commits = [commit for commit in commits if commit not in result]
-    if len(commits) == 0:
-        return result
-    try:
-        lines = get_git_output(["show", "-s", "--format=%ct"] + commits).split()
-        result.update({commits[i]: int(lines[i]) for i in range(len(commits))})
-        _commit_time_cache.update(result)
-        return result
-    except:
-        return {}
+    missing_refs = [ref for ref, commit in ref_commits.items() if commit not in _commit_time_cache]
+    if len(missing_refs) > 0:
+        try:
+            lines = get_git_output(["show", "-s", "--format=%ct"] + refs).split()
+            for i, line in enumerate(lines):
+                _commit_time_cache[ref_commits[refs[i]]] = int(line)
+        except:
+            return {}
+    return {
+        ref: _commit_time_cache[commit] 
+        for ref, commit in ref_commits.items()
+    }
 
 
 @functools.lru_cache
-def get_short_name(commit: str) -> str:
-    resolved = resolve_ref(commit)
-    if len(resolved) == 0:
-        return terminal.color_bad(commit)
+def get_short_name(ref: str, plain: bool = False) -> str:
+    commit = resolve_ref(ref)
+    if len(commit) == 0:
+        return ref if plain else terminal.color_bad(ref)
     short_name = get_git_output(["log", '--pretty=format:"%h"', commit, "-n", "1", "--abbrev-commit"])
-    return terminal.color_rev(short_name)
+    return short_name if plain else terminal.color_ref(short_name)
 
 
 @functools.lru_cache
-def get_plain_short_name(commit: str) -> str:
-    resolved = resolve_ref(commit)
-    if len(resolved) == 0:
-        return commit
-    return get_git_output(["log", '--pretty=format:"%h"', commit, "-n", "1", "--abbrev-commit"])
-
-
-@functools.lru_cache
-def get_short_log(commit: str) -> str:
-    commit_msg = get_git_output(["log", '--pretty=format:"%s"', commit, "-n", "1", "--abbrev-commit"])
-    return get_short_name(commit) + " " + commit_msg
+def get_short_log(ref: str) -> str:
+    commit_message = get_git_output(["log", '--pretty=format:"%s"', ref, "-n", "1", "--abbrev-commit"])
+    return get_short_name(ref) + " " + commit_message
 
 
 @functools.lru_cache(maxsize=None)
-def resolve_ref(ref: str) -> str:
-    return get_git_output(["rev-parse", "--revs-only", ref.strip()]).strip()
+def resolve_ref(ref: str, fetch_if_missing: bool = False) -> str:
+    commit = get_git_output(["rev-parse", "--revs-only", ref.strip()])
+    if fetch_if_missing and len(commit) == 0 and not _already_fetched:
+        print(f"Resolving \"{ref}\" failed, fetching in case it's too recent...")
+        fetch()
+        return resolve_ref(ref, False)
+    return commit
 
 
-def query_rev_list(start_ref: str, end_ref: str, path_spec: str = "", before: int = -1) -> list[str]:
-    return list(_query_rev_list(start_ref, end_ref, path_spec, before))
+def get_commit_list(start_ref: str, end_ref: str, path_spec: str = "", before: int = -1) -> list[str]:
+    return list(_get_commit_list(start_ref, end_ref, path_spec, before))
 
 
 @functools.lru_cache
-def _query_rev_list(start_ref: str, end_ref: str, path_spec: str = "", before: int = -1) -> list[str]:
+def _get_commit_list(start_ref: str, end_ref: str, path_spec: str = "", before: int = -1) -> list[str]:
     command = ["rev-list", "--reverse", f"{start_ref}..{end_ref}"]
     if before >= 0:
         command += [f"--before={before}"]
-    if path_spec:
+    if path_spec != "":
         command += ["--"] + shlex.split(path_spec)
     output = get_git_output(command)
-    rev_list = [k.strip() for k in output.split() if k.strip() != ""]
-    if len(rev_list) > 0:
-        resolved_start_ref = resolve_ref(start_ref)
-        resolved_end_ref = resolve_ref(end_ref)
-        if resolved_start_ref != resolved_end_ref:
-            rev_list.insert(0, resolved_start_ref)
-    return rev_list
+    commit_list = [k for k in output.split() if k != ""]
+    start_commit = resolve_ref(start_ref)
+    if start_commit != "" and (len(commit_list) > 0 or start_commit == resolve_ref(end_ref)):
+        commit_list = commit_list.insert(0, start_commit)
+    return commit_list
 
 
-def get_bisect_commits(good_commits: set[str], bad_commits: set[str], path_spec: str = "", before: int = -1) -> list[str]:
-    command = ["rev-list", "--bisect-all"] + [f"^{commit}" for commit in good_commits] + list(bad_commits)
+def get_bisect_commits(good_refs: set[str], bad_refs: set[str], path_spec: str = "", before: int = -1) -> list[str]:
+    command = ["rev-list", "--bisect-all"] + [f"^{commit}" for commit in good_refs] + list(bad_refs)
     if before >= 0:
         command += [f"--before={before}"]
-    if path_spec:
+    if path_spec != "":
         command += ["--"] + shlex.split(path_spec)
     output = get_git_output(command)
-    return [line.strip().split()[0].strip() for line in output.splitlines() if len(line.strip()) > 0]
+    return [line.strip().split()[0] for line in output.splitlines() if len(line.strip()) > 0]
 
 
 def get_local_changes() -> bool:
@@ -250,42 +266,35 @@ def get_tags() -> list[str]:
     return [line.strip() for line in get_git_output(["tag", "-l"]).splitlines()]
 
 
-def is_ancestor(possible_ancestor: str, commit: str) -> bool:
-    return len(query_rev_list(possible_ancestor, commit)) > 0
-
-
-def get_parents(commit: str) -> set[str]:
-    if commit in _parent_cache:
-        return _parent_cache[commit]
-    output = get_git_output(["log", "--pretty=format:%P", commit, "-n", "1"])
-    retval = {line.strip() for line in output.split() if len(line.strip()) > 0}
-    _parent_cache[commit] = retval
-    return retval
+def is_ancestor(possible_ancestor_ref: str, possible_descendant_ref: str) -> bool:
+    return len(get_commit_list(possible_ancestor_ref, possible_descendant_ref)) > 0
 
 
 _diffs_added = 0
 def get_diff_size(commit_src: str, commit_dst: str) -> int:
-    global _diffs_added
     if commit_src > commit_dst:
         commit_src, commit_dst = commit_dst, commit_src
-    if commit_src in _diff_precache:
-        if commit_dst in _diff_precache[commit_src]:
-            return _diff_precache[commit_src][commit_dst]
-    if commit_src in _diff_cache:
-        if commit_dst in _diff_cache[commit_src]:
-            return _diff_cache[commit_src][commit_dst]
+    
+    for cache in (_diff_precache, _diff_cache):
+        if commit_src in cache:
+            if commit_dst in cache[commit_src]:
+                return cache[commit_src][commit_dst]
+
     retval = _get_diff_size(commit_src, commit_dst)
     if commit_src not in _diff_cache:
         _diff_cache[commit_src] = {}
     _diff_cache[commit_src][commit_dst] = retval
+
+    global _diffs_added
     _diffs_added += 1
     if _diffs_added % 100 == 0:
         save_cache()
+
     return retval
 
 
-def _get_diff_size(commit_src: str, commit_dst: str) -> int:
-    output = get_git_output(["diff", "--shortstat", commit_src, commit_dst])
+def _get_diff_size(ref_src: str, ref_dst: str) -> int:
+    output = get_git_output(["diff", "--shortstat", ref_src, ref_dst])
     if len(output) == 0:
         return 0
     try:
@@ -302,8 +311,8 @@ def _get_diff_size(commit_src: str, commit_dst: str) -> int:
 
 
 def cache_clear() -> None:
-    _query_rev_list.cache_clear()
+    # TODO doesn't properly clear neighbor cache which may need new children
+    _get_commit_list.cache_clear()
     get_short_name.cache_clear()
-    get_plain_short_name.cache_clear()
     get_short_log.cache_clear()
     resolve_ref.cache_clear()

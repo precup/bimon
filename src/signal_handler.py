@@ -1,6 +1,7 @@
 import signal
 import sys
 
+DYING = False
 SHOULD_EXIT = False
 SHOULD_PRINT = True
 SHOULD_INSTADIE = True
@@ -9,8 +10,9 @@ SECOND_MESSAGE = "Second interrupt received, exiting immediately..."
 
 
 def _signal_handler(__sig, __frame) -> None:
-    global SHOULD_EXIT
+    global SHOULD_EXIT, DYING
     if SHOULD_EXIT or SHOULD_INSTADIE:
+        DYING = True
         _thread_print(MESSAGE if SHOULD_INSTADIE else SECOND_MESSAGE)
         sys.exit(1)
     SHOULD_EXIT = True

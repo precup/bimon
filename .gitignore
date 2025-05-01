@@ -1,20 +1,26 @@
-compress_map
-rev_list
-
+################################################
+#            BiMon specific ignores            #
+################################################
+# BiMon data directories
 versions
 mrps
-godot
+workspace
 
-mold
+# BiMon internal state
+state/bundle_map
+state/history
+state/git_cache
 
+# Per user state
 config.ini
-history
 compile_error_commits
 ignored_commits
 
-tmp
 
 
+################################################
+# Random stuff from some CC0 repo's .gitignore #
+################################################
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
