@@ -17,12 +17,17 @@ MIN_SUCCESSES = 3
 error_commits = set()
 
 
-def compress(compiled_versions: list[str], retry: bool = False, compress_all: bool = False) -> bool:
+def compress(
+        compiled_versions: list[str], 
+        retry: bool = False, 
+        compress_all: bool = False) -> bool:
     compiled_versions_set = set(compiled_versions)
     unbundled_versions = set(storage.get_unbundled_versions())
     version_list = [version for version in compiled_versions if version in unbundled_versions]
     # TODO rework, this still kind of sucks
-    # commit_list += [version for version in unbundled_versions if version not in compiled_versions_set]
+    # commit_list += [
+    #     version for version in unbundled_versions if version not in compiled_versions_set
+    # ]
     if len(version_list) == 0:
         return True
 
@@ -95,9 +100,18 @@ def get_remaining_time_str(job_count: int, average_time: float, processed_count:
     return terminal.color_key(remaining_time_str)
 
 
-def print_compile_status(tags: list[str], full_commit_list: list[str], present_versions: set[str], processed_count: int, job_commits: list[str], times: dict[str, float], error_commits: list[str], current_commit: str) -> None:
+def print_compile_status(
+        tags: list[str], 
+        full_commit_list: list[str], 
+        present_versions: set[str], 
+        processed_count: int, 
+        job_commits: list[str], 
+        times: dict[str, float], 
+        error_commits: list[str], 
+        current_commit: str) -> None:
     cols = terminal.get_cols()
-    print(terminal.box_top(title=terminal.color_key(f" Compiling #{processed_count + 1} of {len(job_commits)} ")))
+    title = terminal.color_key(f" Compiling #{processed_count + 1} of {len(job_commits)} ")
+    print(terminal.box_top(title=title))
     
     average_time = sum(times.values()) / len(times) if times else 0
     average_time_str = "--:--"
@@ -106,10 +120,11 @@ def print_compile_status(tags: list[str], full_commit_list: list[str], present_v
         minutes = int(round(average_time)) // 60
         average_time_str = f"{minutes:02}:{seconds:02}"
     remaining_time_str = get_remaining_time_str(len(job_commits), average_time, processed_count)
-    error_str = terminal.color_bad(f"{len(error_commits)}") if len(error_commits) > 0 else terminal.color_good("0")
-    print(terminal.box_fit(
-        f"Average time: {average_time_str}, Remaining time: {remaining_time_str}, Errors: {error_str}"
-    ))
+    error_str = terminal.color_good("0")
+    if len(error_commits) > 0:
+        error_str = terminal.color_bad(f"{len(error_commits)}")
+    print(terminal.box_fit(f"Average time: {average_time_str},"
+        + f" Remaining time: {remaining_time_str}, Errors: {error_str}"))
 
     print(terminal.box_fit(
         terminal.trim_str(f"Current commit: {git.get_short_log(current_commit)}", cols - 4)
@@ -117,14 +132,25 @@ def print_compile_status(tags: list[str], full_commit_list: list[str], present_v
 
     fraction_done = float(processed_count) / max(1, len(job_commits))
     progress_bar = "Job progress (" + terminal.color_key(f"{int(fraction_done * 100):2d}%") + "): "
-    progress_bar += terminal.progress_bar(cols - terminal.escape_len(progress_bar) - 4, fraction_done)
+    progress_bar_length = cols - 4 - terminal.escape_len(progress_bar)
+    progress_bar += terminal.progress_bar(progress_bar_length, fraction_done)
     print(terminal.box_fit(progress_bar))
     print(terminal.box_fit(""))
 
-    current_bucket = print_histogram(cols, full_commit_list, tags, current_commit, present_versions)
+    current_bucket = print_histogram(
+        cols=cols, 
+        full_commit_list=full_commit_list, 
+        tags=tags, 
+        current_commit=current_commit, 
+        present_versions=present_versions
+    )
     bottom = terminal.box_bottom()
     if current_bucket is not None:
-        bottom = bottom[:current_bucket + 2] + terminal.color_key("^") + bottom[current_bucket + 3:]
+        bottom = (
+            bottom[:current_bucket + 2] 
+            + terminal.color_key("^") 
+            + bottom[current_bucket + 3:]
+        )
     print(bottom)
 
 
@@ -132,7 +158,8 @@ def get_fraction_completed(commit_list: list[str], present_versions: set[str]) -
     if not Configuration.IGNORE_OLD_ERRORS:
         compiler_error_commits = storage.get_compiler_error_commits()
         commit_list = [commit for commit in commit_list if commit not in compiler_error_commits]
-    return len([commit for commit in commit_list if commit in present_versions]) / max(1, len(commit_list))
+    present_commits = [commit for commit in commit_list if commit in present_versions]
+    return len(present_commits) / max(1, len(commit_list))
 
 
 def build_tag_line(tag_times: dict[str, int], bucket_times: list[int]) -> str:
@@ -169,7 +196,12 @@ def build_tag_line(tag_times: dict[str, int], bucket_times: list[int]) -> str:
     return tag_output
 
 
-def print_histogram(cols: int, full_commit_list: list[str], tags: list[str], current_commit: str, present_versions: set[str]) -> Optional[int]:
+def print_histogram(
+        cols: int, 
+        full_commit_list: list[str], 
+        tags: list[str], 
+        current_commit: str, 
+        present_versions: set[str]) -> Optional[int]:
     ignored_commits = storage.get_ignored_commits()
     full_commit_list = [commit for commit in full_commit_list if commit not in ignored_commits]
     if len(full_commit_list) == 0:
@@ -179,7 +211,7 @@ def print_histogram(cols: int, full_commit_list: list[str], tags: list[str], cur
 
     bucket_commits = split_list(full_commit_list, cols - 4)
     bucket_fractions = [
-        sum(1 for rev in bucket_commits[j] if rev in present_versions) / max(1, len(bucket_commits[j]))
+        len(set(bucket_commits[j]) & present_versions) / max(1, len(bucket_commits[j]))
         for j in range(len(bucket_commits))
     ]
     bucket_fractions += [0] * max(0, cols - 4 - len(bucket_fractions))
@@ -192,11 +224,11 @@ def print_histogram(cols: int, full_commit_list: list[str], tags: list[str], cur
             for tag, tag_time in tag_times.items()
         }
         commit_times = git.get_commit_times(
-            [bucket_commits[i][0] for i in range(len(bucket_fractions)) if len(bucket_commits[i]) > 0]
+            [bucket[0] for bucket in bucket_commits if len(bucket) > 0]
         )
         bucket_times = [
-            commit_times[bucket_commits[i][0]] if len(bucket_commits[i]) > 0 else -1
-            for i in range(len(bucket_fractions))
+            commit_times[bucket[0]] if len(bucket) > 0 else -1
+            for bucket in bucket_commits
         ]
         tag_line = build_tag_line(tag_times, bucket_times)
         print(terminal.box_fit(tag_line))
@@ -207,7 +239,9 @@ def print_histogram(cols: int, full_commit_list: list[str], tags: list[str], cur
             and (i == len(bucket_fractions) - 1 or bucket_times[i + 1] > current_commit_time)
         ]
     else:
-        possible_current_buckets = [i for i, revs in enumerate(bucket_commits) if current_commit in revs]
+        possible_current_buckets = [
+            i for i, revs in enumerate(bucket_commits) if current_commit in revs
+        ]
 
     print(terminal.box_fit(terminal.histogram_height(bucket_fractions)))
     if Configuration.COLOR_ENABLED:
@@ -215,14 +249,14 @@ def print_histogram(cols: int, full_commit_list: list[str], tags: list[str], cur
     return possible_current_buckets[0] if len(possible_current_buckets) > 0 else None
 
 
-def compile(commits: list[str], should_compress: bool = True, n: int = 1, retry_compress: bool = False, fatal_compress: bool = False) -> bool:
+def compile(commits: list[str], retry_compress: bool = True, fatal_compress: bool = True) -> bool:
     if len(commits) == 0:
         return True
 
     _handle_local_changes()
 
     present_versions = storage.get_present_versions()
-    full_commit_list = git.query_commit_list(Configuration.RANGE_START, Configuration.RANGE_END)
+    full_commit_list = git.get_commit_list(Configuration.RANGE_START, Configuration.RANGE_END)
     tags = git.get_tags()
 
     times = {}
@@ -238,7 +272,16 @@ def compile(commits: list[str], should_compress: bool = True, n: int = 1, retry_
         if Configuration.PRINT_MODE == PrintMode.QUIET:
             print(f"Compiling commit {commit} ({i + 1} / {len(commits)})")
         else:
-            print_compile_status(tags, full_commit_list, present_versions, i, commits, times, error_commits, commit)
+            print_compile_status(
+                tags=tags, 
+                full_commit_list=full_commit_list, 
+                present_versions=present_versions, 
+                processed_count=i, 
+                job_commits=commits, 
+                times=times, 
+                error_commits=error_commits, 
+                current_commit=commit
+            )
 
         processable_commits.remove(commit)
         git.check_out(commit)
@@ -247,7 +290,8 @@ def compile(commits: list[str], should_compress: bool = True, n: int = 1, retry_
             if len(compiled_versions) >= MIN_SUCCESSES:
                 print(f"Error while compiling commit {commit}.")
                 print("Adding to the compile_error_commit file so it's skipped in the future.")
-                print("If you fix its build, you should remove it from the file or run with --ignore-old-errors.")
+                print("If you fix its build, you should remove it from the file"
+                    + " or run with --ignore-old-errors.")
                 storage.add_compiler_error_commits([commit])
             print(f"Error while compiling commit {commit}. Skipping.")
             error_commits.add(commit)
@@ -256,17 +300,23 @@ def compile(commits: list[str], should_compress: bool = True, n: int = 1, retry_
         present_versions.add(commit)
         compiled_versions.append(commit)
         if len(compiled_versions) == MIN_SUCCESSES and len(error_commits) > 0:
-            print("Enough successful compilations have occurred to show that errors are specific to certain commits.")
+            print("Enough successful compilations have occurred to show that errors"
+                + " are specific to certain commits.")
             print("The following commits will be skipped in the future:")
             for commit in error_commits:
                 print("\t" + commit)
             
             storage.add_compiler_error_commits(error_commits)
-            print("If you fix their builds, you should remove them from compile_error_commit or run with --ignore-old-errors.")
+            print("If you fix their builds, you should remove them from"
+                + " compile_error_commit or run with --ignore-old-errors.")
                 
         times[commit] = time.time() - start_time
 
-        if i % (Configuration.BUNDLE_SIZE * 2) == 0 and i > 0 and not signal_handler.SHOULD_EXIT and should_compress:
+        if signal_handler.SHOULD_EXIT:
+            return True
+
+        enough_compiled_for_compress = i % (Configuration.BUNDLE_SIZE * 2) == 0 and i > 0
+        if enough_compiled_for_compress and Configuration.COMPRESSION_ENABLED:
             if not compress(compiled_versions, retry_compress):
                 if fatal_compress:
                     print("Terminating compilation due to compression failure.")
@@ -277,7 +327,7 @@ def compile(commits: list[str], should_compress: bool = True, n: int = 1, retry_
         if signal_handler.SHOULD_EXIT:
             return True
 
-    return signal_handler.SHOULD_EXIT or not should_compress or compress(compiled_versions, retry_compress)
+    return not Configuration.COMPRESSION_ENABLED or compress(compiled_versions, retry_compress)
 
 
 def cache() -> None:
@@ -296,7 +346,8 @@ def cache() -> None:
         for file_path in glob.glob(full_glob_path, recursive=True):
             abs_file_path = os.path.abspath(file_path)
             if not abs_file_path.startswith(abs_workspace_path):
-                print(f"Error: Attempted to copy a file outside the workspace directory: {file_path}")
+                print("Error: Attempted to copy a file outside"
+                    + f" the workspace directory: {file_path}")
                 sys.exit(1)
 
             relative_path = os.path.relpath(abs_file_path, abs_workspace_path)

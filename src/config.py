@@ -39,7 +39,8 @@ class Configuration:
                 print(f"config.ini not found. Falling back to {default_config_path}.")
                 filepath = default_config_path
             else:
-                print(f"Neither config.ini nor {default_config_path} found and no --config provided. Exiting.")
+                print(f"Neither config.ini nor {default_config_path} found"
+                    + " and no --config provided. Exiting.")
                 sys.exit(1)
         elif not os.path.exists(filepath):
             print("The file passed to --config could not be opened. Exiting.")
@@ -47,46 +48,73 @@ class Configuration:
         config.read(filepath)
 
         # General settings
-        Configuration.RANGE_START = config.get("General", "range_start")
-        Configuration.RANGE_END = config.get("General", "range_end")
-        Configuration.ADD_ISSUE_TO_TITLE = config.getboolean("General", "add_issue_to_title")
+        Configuration.RANGE_START = config.get(
+			"General", "range_start")
+        Configuration.RANGE_END = config.get(
+			"General", "range_end")
+        Configuration.ADD_ISSUE_TO_TITLE = config.getboolean(
+            "General", "add_issue_to_title")
 
         # Output settings
-        Configuration.SUBWINDOW_ROWS = config.getint("Output", "subwindow_rows")
-        Configuration.SHOW_TAGS_ON_HISTOGRAM = config.getboolean("Output", "show_tags_on_histogram")
-        Configuration.UNICODE_ENABLED = config.getboolean("Output", "unicode_enabled")
-        Configuration.COLOR_ENABLED = config.getboolean("Output", "color_enabled")
+        Configuration.SUBWINDOW_ROWS = config.getint(
+            "Output", "subwindow_rows")
+        Configuration.SHOW_TAGS_ON_HISTOGRAM = config.getboolean(
+            "Output", "show_tags_on_histogram")
+        Configuration.UNICODE_ENABLED = config.getboolean(
+            "Output", "unicode_enabled")
+        Configuration.COLOR_ENABLED = config.getboolean(
+            "Output", "color_enabled")
 
-        Configuration.MESSAGE_COLOR = config.get("Output", "message_color")
-        Configuration.IMPORTANT_COLOR = config.get("Output", "important_color")
-        Configuration.REFERENCE_COLOR = config.get("Output", "reference_color")
-        Configuration.GOOD_COLOR = config.get("Output", "good_color")
-        Configuration.ERROR_COLOR = config.get("Output", "error_color")
-        Configuration.WARNING_COLOR = config.get("Output", "warning_color")
-        Configuration.PROGRESS_FOREGROUND_COLOR = config.get("Output", "progress_foreground_color")
-        Configuration.PROGRESS_BACKGROUND_COLOR = config.get("Output", "progress_background_color")
-        Configuration.HEATMAP_COLORS = config.get("Output", "heatmap_colors").split()
+        Configuration.MESSAGE_COLOR = config.get(
+            "Output", "message_color")
+        Configuration.IMPORTANT_COLOR = config.get(
+            "Output", "important_color")
+        Configuration.REFERENCE_COLOR = config.get(
+			"Output", "reference_color")
+        Configuration.GOOD_COLOR = config.get(
+			"Output", "good_color")
+        Configuration.ERROR_COLOR = config.get(
+			"Output", "error_color")
+        Configuration.WARNING_COLOR = config.get(
+			"Output", "warning_color")
+        Configuration.PROGRESS_FOREGROUND_COLOR = config.get(
+			"Output", "progress_foreground_color")
+        Configuration.PROGRESS_BACKGROUND_COLOR = config.get(
+			"Output", "progress_background_color")
+        Configuration.HEATMAP_COLORS = config.get(
+			"Output", "heatmap_colors").split()
 
         # Compilation settings
-        Configuration.COMPILER_FLAGS = config.get("Compilation", "compiler_flags")
-        Configuration.COMPILER_FLAGS += " " + config.get("Compilation", "library_flags")
+        Configuration.COMPILER_FLAGS = config.get(
+			"Compilation", "compiler_flags")
+        Configuration.COMPILER_FLAGS += " " + config.get(
+			"Compilation", "library_flags")
 
         # Archiving settings
-        Configuration.COMPRESSION_ENABLED = config.getboolean("Archiving", "compression_enabled")
-        Configuration.EXECUTABLE_PATH = config.get("Archiving", "executable_path")
-        Configuration.ARCHIVE_PATHS = shlex.split(config.get("Archiving", "archive_paths"))
+        Configuration.COMPRESSION_ENABLED = config.getboolean(
+            "Archiving", "compression_enabled")
+        Configuration.EXECUTABLE_PATH = config.get(
+			"Archiving", "executable_path")
+        Configuration.ARCHIVE_PATHS = shlex.split(config.get(
+			"Archiving", "archive_paths"))
         Configuration.ARCHIVE_PATHS = [
             path.replace("{EXECUTABLE_PATH}", Configuration.EXECUTABLE_PATH)
             for path in Configuration.ARCHIVE_PATHS
         ]
-        Configuration.COPY_ON_CACHE = config.getboolean("Archiving", "copy_on_cache")
-        Configuration.BUNDLE_SIZE = config.getint("Archiving", "bundle_size")
+        Configuration.COPY_ON_CACHE = config.getboolean(
+            "Archiving", "copy_on_cache")
+        Configuration.BUNDLE_SIZE = config.getint(
+            "Archiving", "bundle_size")
 
         # Execution settings
-        Configuration.BACKGROUND_DECOMPRESSION_LAYERS = config.getint("Execution", "background_decompression_layers")
-        Configuration.EXTRACTION_POOL_SIZE = config.getint("Execution", "extraction_pool_size")
-        Configuration.DEFAULT_EXECUTION_PARAMETERS = config.get("Execution", "default_execution_parameters")
-        Configuration.BACKUP_EXECUTABLE_REGEX = re.compile(config.get("Execution", "backup_executable_regex"))
+        Configuration.BACKGROUND_DECOMPRESSION_LAYERS = config.getint(
+            "Execution", "background_decompression_layers")
+        Configuration.EXTRACTION_POOL_SIZE = config.getint(
+            "Execution", "extraction_pool_size")
+        Configuration.DEFAULT_EXECUTION_PARAMETERS = config.get(
+            "Execution", "default_execution_parameters")
+        Configuration.BACKUP_EXECUTABLE_REGEX = re.compile(config.get(
+            "Execution", "backup_executable_regex"))
 
 
     @staticmethod

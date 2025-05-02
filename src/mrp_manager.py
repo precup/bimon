@@ -20,24 +20,25 @@ if not os.path.exists(MRP_FOLDER):
     os.mkdir(MRP_FOLDER)
 
 
-def get_issue_number(project: str) -> int:
-    project = project.strip().lower()
-    if ISSUES_URL in project:
-        project = project[project.index(ISSUES_URL) + len(ISSUES_URL):]
-        if project == "" or not project[0].isdigit():
-            print("Unrecoverable internal error: No issue number found in argument despite it being an issue URL.")
+def get_issue_number(flexible_arg: str) -> int:
+    flexible_arg = flexible_arg.strip().lower()
+    if flexible_arg.startswith("#"):
+        flexible_arg = flexible_arg[1:]
+    if ISSUES_URL in flexible_arg:
+        flexible_arg = flexible_arg[flexible_arg.index(ISSUES_URL) + len(ISSUES_URL):]
+        if flexible_arg == "" or not flexible_arg[0].isdigit():
+            print("Unrecoverable internal error: No issue number found in argument"
+                + " despite it being an issue URL.")
             sys.exit(1)
         number = ""
-        for char in project:
+        for char in flexible_arg:
             if char.isdigit():
                 number += char
             else:
                 break
         return int(number)
-    elif project.isdigit():
-        return int(project)
-    elif project.startswith("#") and project[1:].isdigit():
-        return int(project[1:])
+    elif flexible_arg.isdigit():
+        return int(flexible_arg)
     return -1
 
 
@@ -184,10 +185,12 @@ def find_project_file(folder: str, silent: bool = False) -> str:
         return project_files[0] if len(project_files) >= 1 else ""
 
     if len(project_files) > 1:
-        print("Multiple project.godot files found in the extracted folder. Please specify which one to use.")
+        print("Multiple project.godot files found in the extracted folder."
+            + " Please specify which one to use.")
         for i, file in enumerate(project_files):
             print(f"{i}: {file[file.index(UNZIP_FOLDER) + len(UNZIP_FOLDER):]}")
-        choice = input("Enter the number of the project.godot file to use, or n if none look right: ").strip().lower()
+        query = "Enter the number of the project.godot file to use, or n if none look right: "
+        choice = input(query).strip().lower()
         while True:
             if choice.startswith('n'):
                 return ""
@@ -273,8 +276,8 @@ def download_zip(zip_link: str, filename: str) -> bool:
 def get_mrp(issue: int) -> str:
     if issue == -1:
         print("Execution parameters request a {PROJECT} but no project or issue was provided.")
-        response = input("Would you like to use a temporary sandbox project? [Y/n]: ").strip().lower()
-        if response.startswith("n"):
+        response = input("Would you like to use a temporary sandbox project? [Y/n]: ")
+        if response.strip().lower().startswith("n"):
             return ""
         else:
             return create_mrp()
@@ -293,9 +296,13 @@ def get_mrp(issue: int) -> str:
     if len(zip_links) > 0:        
         print("Zip file(s) found in issue. Please select an option.")
         for i, link in enumerate(zip_links):
-            print(f"{i}" + (f" (in {'issue' if i < body_links_len else 'comment'})" if len(zip_links) > body_links_len else '') + f": {link}")
+            body_info = ""
+            if if len(zip_links) > body_links_len:
+                body_info = f" (in {'issue' if i < body_links_len else 'comment'})"
+            print(f"{i}" + body_info + f": {link}")
         print("c: Create a new blank project")
-        choice = input("Enter the number of the zip file to download, or c to create a blank project: ").strip().lower()
+        query = "Enter the number of the zip file to download, or c to create a blank project: "
+        choice = input(query).strip().lower()
 
         while True:
             if choice.startswith('c') or (choice.isdigit() and int(choice) < len(zip_links)):
@@ -307,8 +314,8 @@ def get_mrp(issue: int) -> str:
             return zip_filename if download_zip(zip_link, zip_filename) else ""
     else:
         print(f"No MRP found in issue #{issue}.")
-        response = input("Would you like to create a blank project to use? [Y/n]: ").strip().lower()
-        if response.startswith("n"):
+        response = input("Would you like to create a blank project to use? [Y/n]: ")
+        if response.strip().lower().startswith("n"):
             return ""
 
     return create_mrp(issue)

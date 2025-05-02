@@ -55,15 +55,25 @@ def _load_cache(cache_file_name: str) -> None:
 def save_cache() -> None:
     if not _cache_loaded:
         return
-    with open(CACHE_NAME, "w") as cache_file:
-        for commit, timestamp in _commit_time_cache.items():
+    _save_cache(CACHE_NAME, _commit_time_cache, _diff_cache, _neighbor_cache)
+
+
+def save_precache() -> None:
+    _save_cache(PRECACHE_NAME, _commit_time_cache, _diff_precache, {})
+
+
+def _save_cache(cache_name, commit_time_cache, diff_cache, neighbor_cache) -> None:
+    if not _cache_loaded:
+        return
+    with open(cache_name, "w") as cache_file:
+        for commit, timestamp in commit_time_cache.items():
             cache_file.write(f"{commit} {timestamp}\n")
         cache_file.write("#\n")
-        for src_commit, dsts in _diff_cache.items():
+        for src_commit, dsts in diff_cache.items():
             for dst_commit, size in dsts.items():
                 cache_file.write(f"{src_commit} {dst_commit} {size}\n")
         cache_file.write("#\n")
-        for commit, neighbors in _neighbor_cache.items():
+        for commit, neighbors in neighbor_cache.items():
             cache_file.write(f"{commit} {' '.join(neighbors)}\n")
 
 
@@ -158,7 +168,8 @@ def fetch() -> None:
 
 def get_git_output(args: list[str]) -> str:
     try:
-        output = subprocess.check_output(["git", "-C", Configuration.WORKSPACE_PATH] + args).strip().decode("utf-8")
+        command = ["git", "-C", Configuration.WORKSPACE_PATH] + args
+        output = subprocess.check_output(command).strip().decode("utf-8")
         if len(output) > 0 and output[0] == '"' and output[-1] == '"':
             output = output[1:-1]
         return output
@@ -200,13 +211,15 @@ def get_short_name(ref: str, plain: bool = False) -> str:
     commit = resolve_ref(ref)
     if len(commit) == 0:
         return ref if plain else terminal.color_bad(ref)
-    short_name = get_git_output(["log", '--pretty=format:"%h"', commit, "-n", "1", "--abbrev-commit"])
+    command = ["log", '--pretty=format:"%h"', commit, "-n", "1", "--abbrev-commit"]
+    short_name = get_git_output(command)
     return short_name if plain else terminal.color_ref(short_name)
 
 
 @functools.lru_cache
 def get_short_log(ref: str) -> str:
-    commit_message = get_git_output(["log", '--pretty=format:"%s"', ref, "-n", "1", "--abbrev-commit"])
+    command = ["log", '--pretty=format:"%s"', ref, "-n", "1", "--abbrev-commit"]
+    commit_message = get_git_output(command)
     return get_short_name(ref) + " " + commit_message
 
 
@@ -220,27 +233,50 @@ def resolve_ref(ref: str, fetch_if_missing: bool = False) -> str:
     return commit
 
 
-def get_commit_list(start_ref: str, end_ref: str, path_spec: str = "", before: int = -1) -> list[str]:
+def get_commit_list(
+        start_ref: str, 
+        end_ref: str, 
+        path_spec: str = "", 
+        before: int = -1
+        ) -> list[str]:
     return list(_get_commit_list(start_ref, end_ref, path_spec, before))
 
 
 @functools.lru_cache
-def _get_commit_list(start_ref: str, end_ref: str, path_spec: str = "", before: int = -1) -> list[str]:
-    command = ["rev-list", "--reverse", f"{start_ref}..{end_ref}"]
+def _get_commit_list(
+        start_ref: str, 
+        end_ref: str, 
+        path_spec: str = "", 
+        before: int = -1) -> list[str]:
+    command = ["rev-list", "--reverse"]
     if before >= 0:
         command += [f"--before={before}"]
+    if end_ref == "":
+        command += ["--all"]
+        if start_ref != "":
+            command += [f"^{start_ref}"]
+    else:
+        command += [(f"{start_ref}.." if start_ref != "" else "") + end_ref]
     if path_spec != "":
         command += ["--"] + shlex.split(path_spec)
     output = get_git_output(command)
     commit_list = [k for k in output.split() if k != ""]
     start_commit = resolve_ref(start_ref)
     if start_commit != "" and (len(commit_list) > 0 or start_commit == resolve_ref(end_ref)):
-        commit_list = commit_list.insert(0, start_commit)
+        commit_list.insert(0, start_commit)
     return commit_list
 
 
-def get_bisect_commits(good_refs: set[str], bad_refs: set[str], path_spec: str = "", before: int = -1) -> list[str]:
-    command = ["rev-list", "--bisect-all"] + [f"^{commit}" for commit in good_refs] + list(bad_refs)
+def get_bisect_commits(
+        good_refs: set[str], 
+        bad_refs: set[str], 
+        path_spec: str = "", 
+        before: int = -1) -> list[str]:
+    command = (
+        ["rev-list", "--bisect-all"] 
+        + [f"^{commit}" for commit in good_refs] 
+        + list(bad_refs)
+    )
     if before >= 0:
         command += [f"--before={before}"]
     if path_spec != "":
@@ -267,7 +303,11 @@ def get_tags() -> list[str]:
 
 
 def is_ancestor(possible_ancestor_ref: str, possible_descendant_ref: str) -> bool:
-    return len(get_commit_list(possible_ancestor_ref, possible_descendant_ref)) > 0
+    return (
+        possible_ancestor_ref != ""
+        and possible_descendant_ref != ""
+        and len(get_commit_list(possible_ancestor_ref, possible_descendant_ref)) > 0
+    )
 
 
 _diffs_added = 0
@@ -300,7 +340,7 @@ def _get_diff_size(ref_src: str, ref_dst: str) -> int:
     try:
         output_parts = output.split()
         if len(output_parts) < 4:
-            print("bad parts", output_parts)
+            print("Unexpected internal error, please report: bad parts", output_parts)
             return 0
         retval = int(output_parts[3])
         if len(output_parts) >= 6:

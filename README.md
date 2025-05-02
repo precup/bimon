@@ -108,41 +108,39 @@ Major chunks
     6 Improved MRP handling
     8 Side memes
 
-28 - TODO
-  6 MRPs
+24 - TODO
+  5 MRPs
   - couldn't find that one MRP in the comments
   - export command
   - MRP with arbitrary name
   - support adamscott's use case
-  - purge selectors like download only for mrps?
   - support calinou's PR testing workflow
-  9 Bisect
-  - bisect error codes need to get added potentially?
-  - handle unresolveable refs better
+  8 Bisect
   - self._current_revision can be None if initial range doesn't exist
   - handle a lack of initial range better
-  - bisect initial commit marking via project_or_issue, improve commit sha detection
-  - bisect TODOs
   - selection of default start and end for bisect kind of sucks
+
+  - bisect error codes need to get added potentially?
+  - bisect TODOs
   - ?autopurge during bisects
-  - initial bisect arguments bypass error checking as currently written
-  2 Repro/Bisect
-  - does the execution_parameters working directory stuff still work properly, especially allowing -p with no project?
-  - parse_flexible_args overhaul
+  - BisectRunner tmp dir
+  - Make BisectRunner use argparse
+  1 Repro/Bisect
+  - launch from a better working directory if there's no project
   2 Repro
   - ?decide on a better default for repro commit (HEAD? latest compiled?
   - Calls _launch_any directly
-  2 Git
+  3 Git
   - should probably fetch only if a ref fails to resolve that we get from the user on some commands
   - resolve ref also fails for ambiguous refs
-  2 Output
-  - final lines of scons output don't seem to print
-  - check that the time estimates include caching and not just compile time, maybe add compression time?
-  4 Misc
+  - git.get_commit_list should work for empty strings and just not bound that side
+  - git neighbor cache isn't always properly cleared
+  5 Misc
+  - purge command overhaul
+  - maybe add compression time to time estimates?
   - launch should use a temporary directory for the wd if none is provided
   - file paths relative to original not current!!!
     repro/bisect --project
-  - compiles seem to be slower than before, is greedy bad in practice?
   - Package the existing 2000 commits optimally
 
 
@@ -165,6 +163,8 @@ Clean up
 - update bisect command completer
 - revisit command names
 - class vs not
+- ' vs "
+- trailing whitespace
 
 Testing
 
@@ -175,6 +175,8 @@ Documentation
     defaults don't show up properly in help
 - Update argparser help strings
 - Write help subcommand
+- Add descriptions/epilogs
+- Update config files
 
 Maybe someday
 - Non interactive bisect mode

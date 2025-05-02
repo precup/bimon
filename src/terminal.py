@@ -158,7 +158,12 @@ def get_cols() -> int:
         return DEFAULT_OUTPUT_WIDTH
 
 
-def _execute_in_subwindow_pty(command: list[str], title: str, rows: int, cwd: Optional[str], eat_kill: bool) -> bool:
+def _execute_in_subwindow_pty(
+        command: list[str], 
+        title: str, 
+        rows: int, 
+        cwd: Optional[str], 
+        eat_kill: bool) -> bool:
     process = PtyProcess.spawn(command, cwd=cwd)
     cols = get_cols()
     output_lines = [""]
@@ -182,7 +187,8 @@ def _execute_in_subwindow_pty(command: list[str], title: str, rows: int, cwd: Op
                     new_lines = split_to_display_lines(output_lines[-1] + lines[0], cols)
                     if len(old_lines) == len(new_lines):
                         output_lines[-1] += lines[0]
-                        print(ANSI_RESET + "\033[2K" + "".join(new_lines[-1][0]) + new_lines[-1][1], end="")
+                        line_text = "".join(new_lines[-1][0]) + new_lines[-1][1]
+                        print(ANSI_RESET + "\033[2K" + line_text, end="")
                         sys.stdout.flush()
                         continue
                 output_lines[-1] += lines[0]
@@ -194,7 +200,10 @@ def _execute_in_subwindow_pty(command: list[str], title: str, rows: int, cwd: Op
             break
         
         window_lines = []
-        for line in output_lines[::-1]:
+        last_non_blank = -1
+        while last_non_blank >= -len(output_lines) and output_lines[last_non_blank].strip() == "":
+            last_non_blank -= 1
+        for line in output_lines[last_non_blank::-1]:
             split_lines = split_to_display_lines(line, cols)
             if len(split_lines) > rows - len(window_lines):
                 if rows > len(window_lines):
@@ -223,18 +232,17 @@ def _execute_in_subwindow_pty(command: list[str], title: str, rows: int, cwd: Op
         )
         ansi_codes_seen.update({match.group() for match in ANSI_ESCAPE.finditer(center)})
         output = (
-            (f"\033[{prev_lines_printed}A\r" if prev_lines_printed > 0 else "") + ANSI_RESET + top + "\n" 
+            (f"\033[{prev_lines_printed}A\r" if prev_lines_printed > 0 else "") 
+            + ANSI_RESET + top + "\n" 
             + center + ANSI_RESET + "\n" 
             + bottom + "\r\033[1A"
         )
         print(output, end="")
         sys.stdout.flush()
-        time.sleep(5)
 
     process.wait()
-    move_rows_down(min(lines_printed, 2))
-    print("", end="\r")
-    sys.stdout.flush()
+    if lines_printed > 0:
+        move_rows_down(2)
     # print("Ansicodes seen:", ansi_codes_seen)
     if process.exitstatus != 0:
         print("Dumping full process log because an error occurred:")
@@ -242,13 +250,19 @@ def _execute_in_subwindow_pty(command: list[str], title: str, rows: int, cwd: Op
     return process.exitstatus == 0
 
 
-def execute_in_subwindow(command: list[str], title: str, rows: int, cwd: Optional[str] = None, eat_kill: bool = False) -> bool:
+def execute_in_subwindow(
+        command: list[str], 
+        title: str, 
+        rows: int, 
+        cwd: Optional[str] = None, 
+        eat_kill: bool = False) -> bool:
     if cwd == "":
         cwd = None
     if len(command) > 0:
         if os.path.exists(command[0]):
             try:
-                os.chmod(command[0], os.stat(command[0]).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                exec_bits = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+                os.chmod(command[0], os.stat(command[0]).st_mode | exec_bits)
             except:
                 pass
         else:
@@ -263,7 +277,8 @@ def execute_in_subwindow(command: list[str], title: str, rows: int, cwd: Optiona
         stderr = subprocess.DEVNULL
     else:
         if Configuration.PRINT_MODE != PrintMode.VERBOSE:
-            print(f"Internal error: unknown print mode {Configuration.PRINT_MODE}. Falling back to VERBOSE.")
+            print(f"Internal error: unknown print mode {Configuration.PRINT_MODE}."
+                  + " Falling back to VERBOSE.")
         stdout = sys.stdout
         stderr = sys.stderr
 
@@ -449,7 +464,8 @@ def histogram_color(fractions: list[float]) -> str:
         color_index = max(min(1, fraction), 0) * (len(colors) - 1 - (0 if use_first else 1))
         if fraction > 0 and not use_first:
             color_index += 1
-        bucket_color = blend_colors(colors[int(color_index)], colors[min(len(colors) - 1, int(color_index) + 1)], color_index % 1)
+        blend_index = min(len(colors) - 1, int(color_index) + 1)
+        bucket_color = blend_colors(colors[int(color_index)], colors[blend_index], color_index % 1)
         output += color(C437_HEIGHT_PARTS[-1], bucket_color)
     return output
 
@@ -461,7 +477,7 @@ def move_rows_up(n: int) -> None:
 
 def move_rows_down(n: int) -> None:
     if Configuration.PRINT_MODE == PrintMode.LIVE and n > 0:
-        print(f"\033[{n}B", end="")
+        print("\n" * n, end="")
 
 
 def move_cursor_to(x: int, y: int) -> None:
