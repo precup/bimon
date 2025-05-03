@@ -6,12 +6,12 @@ import subprocess
 from collections import defaultdict, deque
 from typing import Optional
 
+from src import storage
 from src import terminal
 from src.config import Configuration
-from src.storage import STATE_DIR
 
-_CACHE_NAME = os.path.join(STATE_DIR, "git_cache")
-_PRECACHE_NAME = os.path.join(STATE_DIR, "git_precache")
+_CACHE_NAME = "git_cache"
+_PRECACHE_NAME = "git_precache"
 
 _commit_time_cache = {}
 _neighbor_cache = {}
@@ -29,27 +29,25 @@ def load_cache() -> None:
     _cache_loaded = True
 
 
-def _load_cache(cache_file_name: str) -> None:
-    if not os.path.exists(cache_file_name):
-        return
-    with open(cache_file_name, "r") as cache_file:
-        section = 0
-        for line in cache_file:
-            if line.startswith("#"):
-                section += 1
-                continue
-            parts = line.strip().split()
-            if section == 0:
-                _commit_time_cache[parts[0]] = int(parts[1])
-            elif section == 1:
-                src_commit, dst_commit = parts[0], parts[1]
-                if src_commit > dst_commit:
-                    src_commit, dst_commit = dst_commit, src_commit
-                if src_commit not in _diff_cache:
-                    _diff_cache[src_commit] = {}
-                _diff_cache[src_commit][dst_commit] = int(parts[2])
-            elif section == 2:
-                _neighbor_cache[parts[0]] = set(parts[1:])
+def _load_cache(cache_name: str) -> None:
+    cache_str = storage.load_state(cache_name)
+    section = 0
+    for line in cache_str.splitlines():
+        if line.startswith("#"):
+            section += 1
+            continue
+        parts = line.strip().split()
+        if section == 0:
+            _commit_time_cache[parts[0]] = int(parts[1])
+        elif section == 1:
+            src_commit, dst_commit = parts[0], parts[1]
+            if src_commit > dst_commit:
+                src_commit, dst_commit = dst_commit, src_commit
+            if src_commit not in _diff_cache:
+                _diff_cache[src_commit] = {}
+            _diff_cache[src_commit][dst_commit] = int(parts[2])
+        elif section == 2:
+            _neighbor_cache[parts[0]] = set(parts[1:])
 
 
 def save_cache(overwrite: bool = False) -> None:
@@ -58,23 +56,40 @@ def save_cache(overwrite: bool = False) -> None:
     _save_cache(_CACHE_NAME, _commit_time_cache, _diff_cache, _neighbor_cache)
 
 
+def delete_cache(dry_run: bool = False) -> int:
+    deleted = 0
+    def delete_single_cache(cache_name: str) -> None:
+        cache_path = storage.get_state_filename(cache_name)
+        if os.path.exists(cache_path):
+            if dry_run:
+                print(f"Would delete {cache_path}")
+            else:
+                if Configuration.PRINT_MODE == Configuration.PrintMode.VERBOSE:
+                    print(f"Deleting {cache_path}")
+                os.remove(cache_path)
+            deleted += 1
+
+    delete_single_cache(_CACHE_NAME)
+    delete_single_cache(_PRECACHE_NAME)
+    return deleted
+
+
 def save_precache() -> None:
     _save_cache(_PRECACHE_NAME, _commit_time_cache, _diff_precache, {})
 
 
 def _save_cache(cache_name, commit_time_cache, diff_cache, neighbor_cache) -> None:
-    if not _cache_loaded:
-        return
-    with open(cache_name, "w") as cache_file:
-        for commit, timestamp in commit_time_cache.items():
-            cache_file.write(f"{commit} {timestamp}\n")
-        cache_file.write("#\n")
-        for src_commit, dsts in diff_cache.items():
-            for dst_commit, size in dsts.items():
-                cache_file.write(f"{src_commit} {dst_commit} {size}\n")
-        cache_file.write("#\n")
-        for commit, neighbors in neighbor_cache.items():
-            cache_file.write(f"{commit} {" ".join(neighbors)}\n")
+    cache_str = ""
+    for commit, timestamp in commit_time_cache.items():
+        cache_str += f"{commit} {timestamp}\n"
+    cache_str += "#\n"
+    for src_commit, dsts in diff_cache.items():
+        for dst_commit, size in dsts.items():
+            cache_str += f"{src_commit} {dst_commit} {size}\n"
+    cache_str += "#\n"
+    for commit, neighbors in neighbor_cache.items():
+        cache_str += f"{commit} {" ".join(neighbors)}\n"
+    storage.save_state(cache_name, cache_str)
 
 
 def _update_neighbors(commits: Optional[set[str]] = None) -> None:
@@ -99,14 +114,13 @@ def _get_neighbors(commit: str) -> set[str]:
 
 def sort_commits(commits_to_sort: list[str]) -> list[str]:
     possible_commits = set(commits_to_sort)
-    visited = set()
     sorted_commits = []
     for commit in commits_to_sort:
         curr = commit
-        while curr is not None and curr not in visited:
+        while curr is not None and curr in possible_commits:
             possible_commits.remove(curr)
             sorted_commits.append(curr)
-            curr = get_similar_commit(curr, possible_commits, visited)
+            curr = get_similar_commit(curr, possible_commits)
     return sorted_commits
 
 
@@ -154,8 +168,19 @@ def clone(repository: str, target: str) -> bool:
         return False
 
 
+def get_pull_branch_name(pull_number: int) -> str:
+    return f"pr-{pull_number}"
+
+
 def check_out(rev: str) -> None:
     get_git_output(["checkout", "-q", rev])
+
+
+def check_out_pull(pull_number: int, branch_name = Optional[str]) -> None:
+    if branch_name is None:
+        branch_name = get_pull_branch_name(pull_number)
+    get_git_output(["fetch", "origin", f"+pull/{pull_number}/head:" + branch_name])
+    check_out(branch_name)
 
 
 def fetch() -> None:

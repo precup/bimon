@@ -5,12 +5,33 @@ from typing import Optional
 
 from src import factory
 from src import git
-from src import mrp_manager
 from src import storage
 from src import terminal
 from src.config import Configuration
 
-NO_PROJECT_FOLDER = os.path.join(mrp_manager.MRP_FOLDER, "no_project_folder")
+_CACHE_NAME = "execution_cache"
+
+
+def delete_cache() -> None:
+    storage.delete_state(_CACHE_NAME)
+
+
+def get_mru(commits: set[str], max_count: int) -> list[str]:
+    mru = []
+    used_order = storage.load_state(_CACHE_NAME)
+    for commit in used_order.split():
+        if commit in commits:
+            mru.append(commit)
+    
+    return mru[:max_count]
+
+
+def _mark_used(commit: str) -> None:
+    used_order_str = storage.load_state(_CACHE_NAME)
+    used_order = used_order_str.split()
+    loose_versions = set() # TODO
+    used_order = [commit] + [c for c in used_order if c != commit and c in loose_versions]
+    storage.save_state(_CACHE_NAME, " ".join(used_order))
 
 
 def launch(
@@ -20,10 +41,6 @@ def launch(
         discard: bool, 
         cached_only: bool, 
         wd: str = "") -> bool:
-    if wd == "":
-        storage.rm(NO_PROJECT_FOLDER)
-        os.makedirs(NO_PROJECT_FOLDER, exist_ok=True)
-        wd = NO_PROJECT_FOLDER
     commit = git.resolve_ref(ref)
     if commit == "":
         print(f"Invalid ref: \"{ref}\" could not be resolved.")
@@ -49,7 +66,8 @@ def launch(
         print(f"Failed to extract commit {git.get_short_name(commit)}.")
         return False
     
-    return _launch_folder(os.path.join(storage.VERSIONS_DIR, commit), execution_parameters, wd)
+    _mark_used(commit)
+    return _launch_folder(storage.get_version_folder(commit), execution_parameters, wd)
 
 
 def _find_executable(

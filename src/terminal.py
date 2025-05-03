@@ -10,8 +10,8 @@ import time
 from typing import Optional
 
 from src import signal_handler
+from src import storage
 from src.config import Configuration, PrintMode
-from src.storage import STATE_DIR
 
 if os.name == "nt":
     from pyreadline3 import Readline
@@ -25,7 +25,7 @@ DEFAULT_OUTPUT_WIDTH = 80
 ANSI_RESET = "\033[0m"
 ANSI_CLEAR_LINE = "\033[2K"
 
-_HISTORY_FILE = os.path.join(STATE_DIR, "history")
+_HISTORY_FILE = storage.get_state_filename("history")
 _UNICODE_BAR_PARTS = " ▏▎▍▌▋▊▉█"
 _C437_BAR_PARTS = " ▌█"
 _HEIGHT_EIGHTHS = " ▁▂▃▄▅▆▇█"

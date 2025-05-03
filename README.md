@@ -99,28 +99,21 @@ you should attempt to reproduce the bug. Then, either hit the MARK_GOOD or MARK_
 
 ### TODO
 
-13 - TODO
-  4 MRPs
-  - export command
+8 - TODO
+  2 MRPs
   - MRP with arbitrary name
   - support adamscott's use case
-  - support calinou's PR testing workflow
+        How do I pass a name and a project to repro and bisect cleanly?
   1 Bisect
   - autopurge during bisects
-  2 Misc
-  - Package the existing 2000 commits optimally
-  - purge command overhaul
-  6 Clean up
-  - VERSIONS_DIR gets used in too many places, same with other DIRS
-  - mrp_manager.update_project_title sucks
-  - Global variables
-        signal_handler has 4
-        storage has 2
-        git has 7
-        factory has 2
+
+  3 Clean up
   - _parse_flexible_args sucks
   - Better output, colors, text decorations?
   - progress bar feels a bit cluttered
+  - src/git.py:192:    print("[TODO] Fetch output length:", len(fetch_output))
+  - src/git.py:298:# TODO the refs should be optional, empty string sentinels are ugly here
+  - src/project_manager.py:233:        # TODO should this have a default
 
 Testing
 
@@ -135,6 +128,7 @@ Testing
 - 1 revisit command names
 - 1 trailing whitespace
 - 1 update includes
+- 1 review gitignore
 
 Documentation
 - Write README.md

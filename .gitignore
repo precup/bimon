@@ -3,13 +3,14 @@
 ################################################
 # BiMon data directories
 versions
-mrps
+projects
 workspace
 
 # BiMon internal state
 state/bundle_map
 state/history
 state/git_cache
+state/execution_cache
 
 # Per user state
 config.ini

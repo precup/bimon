@@ -1,11 +1,12 @@
 import signal
 import sys
 
+_MESSAGE = "Interrupt received, exiting after this step. Send another to exit now."
+_SECOND_MESSAGE = "Second interrupt received, exiting immediately..."
+
 _dying = False
 _should_exit = False
 _should_print = True
-_MESSAGE = "Interrupt received, exiting after this step. Send another to exit now."
-_SECOND_MESSAGE = "Second interrupt received, exiting immediately..."
 
 
 def _signal_handler(__sig, __frame) -> None:
@@ -34,7 +35,7 @@ def install() -> None:
     signal.signal(signal.SIGINT, _signal_handler)
 
 
-def get_status() -> str:
+def status() -> str:
     if _dying:
         return _SECOND_MESSAGE
     elif _should_exit:

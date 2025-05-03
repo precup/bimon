@@ -79,18 +79,18 @@ def get_bimon_parser() -> ArgumentParser:
     repro_parser = subparsers.add_parser("repro", help=
         "Try to reproduce an issue with some convenience options.",
         add_help=False)
-    repro_parser.add_argument("-d", "--discard", action="store_true", help=
-        "Prevents caching anything that gets compiled.")
-    repro_parser.add_argument("-e", "--execution-parameters", type=str, help=
-        "The parameters to pass to the executable. See the config.ini comments for details.")
     repro_parser.add_argument("-p", "--project", type=str, help=
-        "The project to use as an MRP. Can be a directory, project.godot, zip file, or link.")
+        "The project to use for testing. Can be a project name, directory, project.godot, zip file, or link.")
     repro_parser.add_argument("-i", "--issue", type=str, help=
         "The issue number or URL to try reproducing.")
-    repro_parser.add_argument("-r", "--ref", "--commit", type=str, help=
-        "The commit to test with. Also accepts git references.")
+    repro_parser.add_argument("-r", "--ref", "--commit", "--pr", type=str, help=
+        "The commit to test with. Also accepts git references or PRs.")
+    repro_parser.add_argument("-e", "--execution-parameters", type=str, help=
+        "The parameters to pass to the executable. See the config.ini comments for details.")
+    repro_parser.add_argument("-d", "--discard", action="store_true", help=
+        "Prevents caching anything that gets compiled.")
     repro_parser.add_argument("flexible_args", nargs="*", help=
-        "Accepts the same things as project, issue, and ref. Autodetects which is which.")
+        "Accepts the same things as project, issue, and -r. Autodetects which is which.")
     add_messages("repro", repro_parser)
     repro_parser.set_defaults(func=lambda args: 
         commands.repro_command(
@@ -106,7 +106,7 @@ def get_bimon_parser() -> ArgumentParser:
         "Bisect history to find a regression's commit via an interactive mode.",
         add_help=False)
     bisect_parser.add_argument("-p", "--project", type=str, default=None, help=
-        "The project to use for testing. Can be a directory, project.godot, zip file, or link.")
+        "The project to use for testing. Can be an existing project name, directory, project.godot, zip file, or link.")
     bisect_parser.add_argument("-i", "--issue", type=str, default=None, help=
         "The issue to test. Can be a link or number.")
     bisect_parser.add_argument("-r", "--range", type=str, default=None, help=
@@ -115,7 +115,7 @@ def get_bimon_parser() -> ArgumentParser:
         "The parameters to pass to the executable. See the config.ini comments for details.")
     bisect_parser.add_argument("-d", "--discard", action="store_true", help=
         "Prevents caching binaries compiled during a bisect.")
-    bisect_parser.add_argument("-c", "--cached-only", action="store_true", help=
+    bisect_parser.add_argument("--cached-only", action="store_true", help=
         "Prevents compiling at all during a bisect.")
     bisect_parser.add_argument("--ignore-date", action="store_true", help=
         "Don't use the issue open date to cut down the commit range.")
@@ -169,7 +169,7 @@ def get_bimon_parser() -> ArgumentParser:
         "Compile and store specific commits.",
         add_help=False)
     compile_parser.add_argument("ref_ranges", nargs="*", default="HEAD", help=
-        "The commits to compile. Accepts references or ranges. Uses HEAD if not provided.")
+        "The commits to compile. Accepts references, ranges, or PRs. Uses HEAD if not provided.")
     add_messages("compile", compile_parser)
     compile_parser.set_defaults(func=lambda args: 
         commands.compile_command(args.refs))
@@ -181,7 +181,7 @@ def get_bimon_parser() -> ArgumentParser:
         "Forces all files into bundles even if it makes suboptimal bundles.")
     add_messages("compress", compress_parser)
     compress_parser.set_defaults(func=lambda args: 
-        commands.compress_command(args.n, args.all))
+        commands.compress_command(args.all))
 
     extract_parser = subparsers.add_parser("extract", help=
         "Extract a specific version that's already built from storage.",

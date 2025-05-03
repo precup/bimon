@@ -14,6 +14,7 @@ from src import terminal
 from src.config import Configuration, PrintMode
 
 _MIN_SUCCESSES = 3
+
 _bundles_packed = 0
 _compress_time = 0
 
@@ -27,10 +28,9 @@ def compress(
     compiled_versions_set = set(compiled_versions)
     unbundled_versions = set(storage.get_unbundled_versions())
     version_list = [version for version in compiled_versions if version in unbundled_versions]
-    # TODO rework, this still kind of sucks
-    # commit_list += [
-    #     version for version in unbundled_versions if version not in compiled_versions_set
-    # ]
+    version_list += [
+        version for version in unbundled_versions if version not in compiled_versions_set
+    ]
     if len(version_list) == 0:
         return True
 
@@ -112,12 +112,12 @@ def _print_compile_status(
         full_commit_list: list[str], 
         present_versions: set[str], 
         processed_count: int, 
-        job_commits: list[str], 
+        job_commits: int, 
         times: dict[str, float], 
         error_commits: list[str], 
         current_commit: str) -> None:
     cols = terminal.get_cols()
-    title = terminal.color_key(f" Compiling #{processed_count + 1} of {len(job_commits)} ")
+    title = terminal.color_key(f" Compiling #{processed_count + 1} of {job_commits} ")
     print(terminal.box_top(title=title))
     
     average_time = 0
@@ -129,7 +129,7 @@ def _print_compile_status(
         seconds = int(round(average_time)) % 60
         minutes = int(round(average_time)) // 60
         average_time_str = f"{minutes:02}:{seconds:02}"
-    remaining_time_str = _get_remaining_time_str(len(job_commits), average_time, processed_count)
+    remaining_time_str = _get_remaining_time_str(job_commits, average_time, processed_count)
     error_str = terminal.color_good("0")
     if len(error_commits) > 0:
         error_str = terminal.color_bad(f"{len(error_commits)}")
@@ -140,7 +140,7 @@ def _print_compile_status(
         terminal.trim_to_line(f"Current commit: {git.get_short_log(current_commit)}", cols - 4)
     ))
 
-    fraction_done = float(processed_count) / max(1, len(job_commits))
+    fraction_done = float(processed_count) / max(1, job_commits)
     progress_bar = "Job progress (" + terminal.color_key(f"{int(fraction_done * 100):2d}%") + "): "
     progress_bar_length = cols - 4 - terminal.non_ansi_len(progress_bar)
     progress_bar += terminal.progress_bar(progress_bar_length, fraction_done)
@@ -259,9 +259,16 @@ def _print_histogram(
     return possible_current_buckets[0] if len(possible_current_buckets) > 0 else None
 
 
-def compile(commits: list[str], retry_compress: bool = True, fatal_compress: bool = True) -> bool:
-    if len(commits) == 0:
+def compile(
+        commits: list[str], 
+        retry_compress: bool = True, 
+        fatal_compress: bool = True,
+        direct_compile: list[str] = [],
+    ) -> bool:
+    total_versions = len(commits) + len(direct_compile)
+    if total_versions == 0:
         return True
+    direct_compile = direct_compile[:]
 
     _handle_local_changes()
 
@@ -272,23 +279,27 @@ def compile(commits: list[str], retry_compress: bool = True, fatal_compress: boo
     times = {}
     compiled_versions = []
     processable_commits = set(commits) - present_versions
-    commit = commits[0]
     error_commits = set()
-    while len(error_commits) + len(compiled_versions) < len(commits):
+    while len(error_commits) + len(compiled_versions) < total_versions:
         i = len(error_commits) + len(compiled_versions)
-        if i > 0:
+        if i > len(direct_compile):
             print("Finding a similar commit to compile next...")
-        commit = git.get_similar_commit(commit, processable_commits)
+            commit = git.get_similar_commit(commit, processable_commits)
+        elif i < len(direct_compile):
+            commit = direct_compile[i]
+        else:
+            commit = commits[0]
+
         start_time = time.time()
         if Configuration.PRINT_MODE == PrintMode.QUIET:
-            print(f"Compiling commit {commit} ({i + 1} / {len(commits)})")
+            print(f"Compiling commit {commit} ({i + 1} / {total_versions})")
         else:
             _print_compile_status(
                 tags=tags, 
                 full_commit_list=full_commit_list, 
                 present_versions=present_versions, 
                 processed_count=i, 
-                job_commits=commits, 
+                job_commits=total_versions, 
                 times=times, 
                 error_commits=error_commits, 
                 current_commit=commit
@@ -345,7 +356,7 @@ def cache() -> None:
     version_name = git.resolve_ref("HEAD")
     print(f"Caching version {version_name}")
 
-    version_path = os.path.join(storage.VERSIONS_DIR, version_name)
+    version_path = storage.get_version_folder(version_name)
     if os.path.exists(version_path):
         print("Version to cache already exists, overwriting it.")
         storage.rm(version_path)
@@ -372,10 +383,18 @@ def cache() -> None:
     print(f"Version {version_name} has been successfully cached.")
 
 
-def _run_scons() -> bool:
+def _run_scons(args: Optional[list[str]] = None) -> bool:
+    if args is None:
+        args = shlex.split(Configuration.COMPILER_FLAGS)
     return terminal.execute_in_subwindow(
-        command=["scons"] + shlex.split(Configuration.COMPILER_FLAGS),
+        command=["scons"] + args,
         title="scons",
         rows=Configuration.SUBWINDOW_ROWS,
         cwd=Configuration.WORKSPACE_PATH,
     )
+
+
+def clean_build_artifacts() -> None:
+    print("Cleaning build artifacts...")
+    _run_scons(["--clean"])
+    print("Build artifacts cleaned.")

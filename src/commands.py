@@ -1,5 +1,6 @@
 import os
 import shlex
+import string
 import sys
 from typing import Optional
 
@@ -7,7 +8,7 @@ from src import bisect
 from src import execution
 from src import factory
 from src import git
-from src import mrp_manager
+from src import project_manager
 from src import parsers
 from src import signal_handler
 from src import storage
@@ -180,7 +181,7 @@ def bisect_command(
     )
     issue_time = -1
     if issue_number >= 0 and not ignore_date:
-        issue_time = mrp_manager.get_approx_issue_creation_time(issue_number)
+        issue_time = project_manager.get_approx_issue_creation_time(issue_number)
 
     bisector = bisect.Bisector(
         discard=discard, 
@@ -192,9 +193,6 @@ def bisect_command(
         initial_goods=goods, 
         initial_bads=bads,
     )
-
-    if bisector._current_commit is None:
-        return
 
     print("Entering bisect interactive mode. Type \"help\" for a list of commands.")
     bisector.queue_decompress_nexts()
@@ -217,6 +215,12 @@ def bisect_command(
 
 
 def extract_command(ref: str, folder: Optional[str]) -> None:
+    pull_number = git.get_pull_number(ref)
+    if pull_number != -1:
+        pull_ref = git.get_pull_branch_name(pull_number)
+        if git.resolve_ref(pull_ref) != "":
+            ref = pull_ref
+
     version = git.resolve_ref(ref)
     if version == "":
         print(f"Invalid ref: {ref} could not be resolved.")
@@ -231,20 +235,32 @@ def extract_command(ref: str, folder: Optional[str]) -> None:
 
 def purge_command(
         projects: Optional[bool], 
-        downloads: Optional[bool], 
         duplicates: Optional[bool], 
         caches: Optional[bool], 
         temp_files: Optional[bool], 
         loose_files: Optional[bool], 
-        build_artifacts: Optional[bool]) -> None:
+        build_artifacts: Optional[bool],
+        dry_run: bool = False) -> None:
     purge_count = 0
     if duplicates:
-        purge_count += storage.purge_duplicate_files()
+        purge_count += storage.purge_duplicate_files(dry_run)
     if projects:
-        purge_count += mrp_manager.purge_all()
-    elif downloads:
-        purge_count += mrp_manager.purge_downloads() # TODO implement
-    print(f"Purged {purge_count} items.")
+        purge_count += project_manager.purge(projects=True, dry_run=dry_run)
+    if temp_files:
+        purge_count += project_manager.purge(temp_files=True, dry_run=dry_run)
+    if build_artifacts:
+        if dry_run:
+            print("Build artifacts will be deleted.")
+        else:
+            factory.clean_build_artifacts()
+    if caches:
+        purge_count += git.delete_cache(dry_run)
+        purge_count += execution.delete_cache(dry_run)
+    if loose_files:
+        purge_count += storage.purge_loose_files(dry_run)
+    
+    if not build_artifacts or purge_count > 0:
+        print(f"Purged {purge_count} items.")
 
 
 def compile_command(ref_ranges: list[str]) -> None:
@@ -253,14 +269,22 @@ def compile_command(ref_ranges: list[str]) -> None:
     if len(ref_ranges) == 0:
         ref_ranges.append("HEAD")
     commits_to_compile = []
+    direct_compile = []
     seen = set()
-    for ref_range in ref_ranges:
-        if ".." in ref_range:
-            commit_list = git.get_commit_list(_get_range_parts(ref_range, allow_empty=True))
+    for who_knows in ref_ranges:
+        if ".." in who_knows:
+            commit_list = git.get_commit_list(_get_range_parts(who_knows, allow_empty=True))
         else:
-            commit = git.resolve_ref(ref_range, fetch_if_missing=True)
+            pull_number = git.get_pull_number(who_knows)
+            if pull_number != -1:
+                git.check_out_pull(pull_number)
+                pull_ref = git.get_pull_branch_name(pull_number)
+                direct_compile.append(git.resolve_ref(pull_ref))
+                continue
+
+            commit = git.resolve_ref(who_knows, fetch_if_missing=True)
             if commit == "":
-                print(f"Invalid commit: {ref_range} was not found.")
+                print(f"Invalid commit: {who_knows} was not found.")
                 sys.exit(1)
             commit_list = [commit]
 
@@ -269,7 +293,7 @@ def compile_command(ref_ranges: list[str]) -> None:
                 seen.add(commit)
                 commits_to_compile.append(commit)
 
-    if not factory.compile(commits_to_compile):
+    if not factory.compile(commits_to_compile, direct_compile=direct_compile):
         sys.exit(1)
 
 
@@ -312,7 +336,10 @@ def help_command(
 
 
 def export_command(project_name: str, export_path: str, title: Optional[str] = None) -> None:
-    pass
+    if any(c in project_name for c in project_manager.INVALID_NAME_CHARS):
+        print(f"Invalid project name: may not contain any of the following characters: {project_manager.INVALID_NAME_CHARS}")
+        sys.exit(1)
+    project_manager.export_project(project_name, export_path, title=title)
 
 
 ############################################################################3
@@ -397,12 +424,28 @@ def _parse_flexible_args(
         add_range(ref_range)
 
     issue_number: int = -1
+    pull_number: int = -1
     project_flexible: Optional[str] = None
     issue_flexible: Optional[str] = None
     ref_flexible: Optional[str] = None
 
     for who_knows in flexible_args:
-        possible_issue_number = mrp_manager.get_issue_number(who_knows)
+        possible_issue_number = -1
+        if single_ref_mode:
+            github_number, is_issue = project_manager.get_github_number(who_knows)
+            if github_number != -1:
+                if is_issue:
+                    possible_issue_number = github_number
+                else:
+                    pull_number = github_number
+                    git.check_out_pull(pull_number)
+                    pull_ref = git.get_pull_branch_name(pull_number)
+                    _exit_if_duplicate(ref, ref_flexible, "ref", who_knows)
+                    ref_flexible = pull_ref
+                    continue
+        else:
+            possible_issue_number = project_manager.get_issue_number(who_knows)
+
         if possible_issue_number != -1 and not who_knows.endswith(".zip"):
             _exit_if_duplicate(issue, issue_number, "issue", who_knows, issue_flexible)
             issue_number = possible_issue_number
@@ -415,7 +458,7 @@ def _parse_flexible_args(
         flipped = who_knows.startswith("^")
         if flipped:
             who_knows = who_knows[1:]
-        if all(c in "0123456789abcdef" for c in who_knows.lower()) and len(who_knows) > 7:
+        if all(c in string.hexdigits for c in who_knows) and len(who_knows) > 7:
             git.resolve_ref(who_knows, fetch_if_missing=True)
         commit = git.resolve_ref(who_knows)
         if commit != "":
@@ -435,13 +478,18 @@ def _parse_flexible_args(
 
     commit = None
     if issue is not None:
-        issue_number = mrp_manager.get_issue_number(issue)
+        issue_number = project_manager.get_issue_number(issue)
     if project_flexible is not None:
         project = project_flexible
     if single_ref_mode:
         if ref_flexible is not None:
             ref = ref_flexible
         if ref is not None:
+            possible_pull_number = project_manager.get_pull_number(ref)
+            if possible_pull_number != -1:
+                pull_number = possible_pull_number
+                git.check_out_pull(pull_number)
+                ref = git.get_pull_branch_name(pull_number)
             commit = git.resolve_ref(ref, fetch_if_missing=True)
             if commit == "":
                 print(f"Invalid ref: {ref} was not found.")
@@ -451,20 +499,22 @@ def _parse_flexible_args(
         execution_parameters = Configuration.DEFAULT_EXECUTION_PARAMETERS
 
     if project is None or project == "":
-        project = mrp_manager.get_mrp(issue_number)
+        project = project_manager.get_mrp(issue_number)
         if project == "" and "{PROJECT}" in execution_parameters:
             print("Nothing to do.")
             sys.exit(0)
+        else:
+            project = project_manager.get_project_path("")
     elif not project.startswith("http"):
         project = storage.resolve_relative_to(project, _ORIGINAL_WD)
 
     if project.endswith(".zip"):
         if project.startswith("http"):
-            if not mrp_manager.download_zip(project, mrp_manager.TEMPORARY_ZIP):
+            if not project_manager.download_zip(project, project_manager.TEMPORARY_ZIP):
                 print("Failed to download zip file.")
                 sys.exit(1)
-            project = mrp_manager.TEMPORARY_ZIP
-        project = mrp_manager.extract_mrp(project, issue_number)
+            project = project_manager.TEMPORARY_ZIP
+        project = project_manager.extract_mrp(project, issue_number)
         if project == "":
             sys.exit(1)
     elif project.endswith("project.godot"):
@@ -473,8 +523,11 @@ def _parse_flexible_args(
     if "{PROJECT}" in execution_parameters:
         execution_parameters = execution_parameters.replace("{PROJECT}", project)
 
+    # TODO this organization is a bit awkward
     if issue_number != -1:
-        print("Issue link:", mrp_manager.ISSUES_URL + str(issue_number))
+        print("Issue link:", project_manager.ISSUES_URL + str(issue_number))
+    if pull_number != -1:
+        print("Pull request link:", project_manager.PULLS_URL + str(issue_number))
 
     return execution_parameters, project, issue_number, commit, goods, bads
 

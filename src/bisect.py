@@ -53,6 +53,7 @@ class Bisector:
         self._started = False
         self._phase_two = False
         self._has_unstarted = False
+        self._has_exited = False
         self._wd = wd
 
         self._handle_time_warnings()

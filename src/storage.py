@@ -1,5 +1,6 @@
 import os
 import shutil
+import string
 import tarfile
 from pathlib import Path
 
@@ -9,12 +10,11 @@ from src import git
 from src.config import Configuration
 from src.pooled_executor import PooledExecutor
 
-VERSIONS_DIR = "versions"
-STATE_DIR = "state"
-
+_VERSIONS_DIR = "versions"
+_STATE_DIR = "state"
 _IGNORE_FILE = "ignored_commits"
 _COMPILE_ERROR_FILE = "compile_error_commits"
-_BUNDLE_MAP_FILE = os.path.join(STATE_DIR, "bundle_map")
+_BUNDLE_MAP_NAME = "bundle_map"
 
 _use_decompress_queue = False
 _decompress_queue = None
@@ -60,8 +60,8 @@ class ZstdTarFile(tarfile.TarFile):
 
 
 def init_storage() -> None:
-    if not os.path.exists(VERSIONS_DIR):
-        os.mkdir(VERSIONS_DIR)
+    if not os.path.exists(_VERSIONS_DIR):
+        os.mkdir(_VERSIONS_DIR)
 
 
 def init_decompress_queue() -> None:
@@ -82,27 +82,25 @@ def set_decompress_queue(versions: list[str]) -> None:
 
 
 def _write_bundle_map(bundle_map: dict[str, str]) -> None:
-    with open(_BUNDLE_MAP_FILE, "w") as f:
-        for version, bundle_id in bundle_map.items():
-            f.write(f"{version}\n{bundle_id}\n")
+    state_str = ""
+    for version, bundle_id in bundle_map.items():
+        state_str += f"{version}\n{bundle_id}\n"
+    save_state(_BUNDLE_MAP_NAME, state_str)
 
 
 def _read_bundle_map() -> dict[str, str]:
-    if not os.path.exists(_BUNDLE_MAP_FILE):
-        return {}
-    with open(_BUNDLE_MAP_FILE, "r") as f:
-        lines = f.readlines()
-        bundle_map = {}
-        for i in range(0, len(lines), 2):
-            version = lines[i].strip()
-            bundle_id = lines[i + 1].strip()
-            bundle_map[version] = bundle_id
+    lines = load_state(_BUNDLE_MAP_NAME).splitlines()
+    bundle_map = {}
+    for i in range(0, len(lines), 2):
+        version = lines[i].strip()
+        bundle_id = lines[i + 1].strip()
+        bundle_map[version] = bundle_id
     return bundle_map
 
 
 def get_present_versions() -> set[str]:
     return (
-        {version for version in os.listdir(VERSIONS_DIR) if git.resolve_ref(version) == version}
+        {version for version in os.listdir(_VERSIONS_DIR) if git.resolve_ref(version) == version}
         | set(_read_bundle_map().keys())
     )
 
@@ -135,27 +133,33 @@ def extract_version(version: str, target: str = "") -> bool:
 
 
 def _extract_version(version: str, target: str) -> bool:
-    version_path = os.path.join(VERSIONS_DIR, version)
+    version_path = os.path.join(_VERSIONS_DIR, version)
     if not os.path.exists(version_path):
         bundle_id = _read_bundle_map().get(version)
         if bundle_id is None:
             print(f"Extraction failed, version {version} not found in storage.")
             return False
 
-        if not _extract_with_zstd(os.path.join(VERSIONS_DIR, bundle_id), version, VERSIONS_DIR):
+        if not _extract_with_zstd(os.path.join(_VERSIONS_DIR, bundle_id), version, _VERSIONS_DIR):
             return False
     if target != "" and target != version_path:
         shutil.copytree(version_path, target, dirs_exist_ok=True)
     return True
 
 
-def purge_duplicate_files(protected_versions: set[str] = set()) -> int:
+def purge_duplicate_files(protected_versions: set[str] = set(), dry_run: bool = False) -> int:
     purge_count = 0
     bundle_map = _read_bundle_map()
-    for version in os.listdir(VERSIONS_DIR):
+    for version in os.listdir(_VERSIONS_DIR):
         if version in bundle_map and version not in protected_versions:
-            rm(os.path.join(VERSIONS_DIR, version))
-            purge_count += 1
+            version_path = os.path.join(_VERSIONS_DIR, version)
+            if dry_run:
+                print(f"Would remove {version_path}")
+                purge_count += get_recursive_file_count(version_path)
+            else:
+                if Configuration.PRINT_MODE == Configuration.PrintMode.VERBOSE:
+                    print(f"Removing {version_path}")
+                purge_count += rm(version_path)
     return purge_count
 
 
@@ -198,7 +202,7 @@ def _extract_with_zstd(bundle_path: str, file_prefix: str, output_dir: str) -> b
 
 
 def compress_bundle(bundle_id: str, bundle: list[str]) -> bool:
-    bundle_path = os.path.join(VERSIONS_DIR, bundle_id)
+    bundle_path = os.path.join(_VERSIONS_DIR, bundle_id)
     if os.path.exists(bundle_path):
         valid_bundles = _read_bundle_map().values()
         if bundle_id in valid_bundles:
@@ -207,7 +211,7 @@ def compress_bundle(bundle_id: str, bundle: list[str]) -> bool:
         print("Bundle already exists but is invalid, removing and rebuilding.")
         rm(bundle_path)
 
-    version_paths = [os.path.join(VERSIONS_DIR, version) for version in bundle]
+    version_paths = [os.path.join(_VERSIONS_DIR, version) for version in bundle]
     try:
         _compress_with_zstd(version_paths, bundle_path)
     except Exception as e:
@@ -228,7 +232,7 @@ def compress_bundle(bundle_id: str, bundle: list[str]) -> bool:
 def get_unbundled_versions() -> list[str]:
     bundle_map = _read_bundle_map()
     return [
-        path for path in os.listdir(VERSIONS_DIR) 
+        path for path in os.listdir(_VERSIONS_DIR) 
         if path not in bundle_map and git.resolve_ref(path) == path
     ]
 
@@ -267,3 +271,55 @@ def resolve_relative_to(path: str, wd: str) -> str:
     if os.path.isabs(path):
         return path
     return os.path.join(wd, path)
+
+
+def save_state(state_name: str, state: str) -> None:
+    state_path = get_state_filename(state_name)
+    if not os.path.exists(_STATE_DIR):
+        os.mkdir(_STATE_DIR)
+    with open(state_path, "w") as f:
+        f.write(state)
+
+
+def load_state(state_name: str) -> str:
+    state_path = get_state_filename(state_name)
+    if not os.path.exists(state_path):
+        return ""
+    with open(state_path, "r") as f:
+        return f.read()
+
+
+def delete_state(state_name: str) -> int:
+    state_path = get_state_filename(state_name)
+    if os.path.exists(state_path):
+        os.remove(state_path)
+        return 1
+    return 0
+
+
+def get_state_filename(state_name: str) -> str:
+    return os.path.join(_STATE_DIR, state_name)
+
+
+def purge_loose_files(dry_run: bool = False) -> int:
+    loose_files = set(os.listdir(_VERSIONS_DIR))
+    loose_files -= set(_read_bundle_map().values())
+    loose_files = {
+        file for file in loose_files 
+        if len(file) != 40 or not all(c in string.hexdigits for c in file)
+    }
+    purged = 0
+    for file in loose_files:
+        path = os.path.join(_VERSIONS_DIR, file)
+        if dry_run:
+            print(f"Would remove {path}")
+            purged += storage.get_recursive_file_count(path)
+        else:
+            if Configuration.PRINT_MODE == Configuration.PrintMode.VERBOSE:
+                print(f"Removing {path}")
+            purged += rm(path)
+    return purged
+
+
+def get_version_folder(version: str) -> str:
+    return os.path.join(_VERSIONS_DIR, version)

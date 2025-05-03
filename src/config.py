@@ -52,8 +52,8 @@ class Configuration:
 			"General", "range_start")
         Configuration.RANGE_END = config.get(
 			"General", "range_end")
-        Configuration.ADD_ISSUE_TO_TITLE = config.getboolean(
-            "General", "add_issue_to_title")
+        Configuration.AUTOUPDATE_PROJECT_TITLES = config.getboolean(
+            "General", "autoupdate_project_titles")
 
         # Output settings
         Configuration.SUBWINDOW_ROWS = config.getint(
