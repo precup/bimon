@@ -5,10 +5,10 @@ import shlex
 import sys
 from enum import Enum
 
-CONFIG_PATH = "config.ini"
-DEFAULT_LINUX_CONFIG_PATH = "default_linux_config.ini"
-DEFAULT_WINDOWS_CONFIG_PATH = "default_windows_config.ini"
-DEFAULT_MACOS_CONFIG_PATH = "default_macos_config.ini"
+_CONFIG_PATH = "config.ini"
+_DEFAULT_LINUX_CONFIG_PATH = "default_linux_config.ini"
+_DEFAULT_WINDOWS_CONFIG_PATH = "default_windows_config.ini"
+_DEFAULT_MACOS_CONFIG_PATH = "default_macos_config.ini"
 
 
 class PrintMode(Enum):
@@ -27,14 +27,14 @@ class Configuration:
         config = configparser.ConfigParser()
 
         if filepath == "":
-            default_config_path = DEFAULT_LINUX_CONFIG_PATH
-            if os.name == 'nt':
-                default_config_path = DEFAULT_WINDOWS_CONFIG_PATH
-            elif sys.platform.lower() == 'darwin':
-                default_config_path = DEFAULT_MACOS_CONFIG_PATH
+            default_config_path = _DEFAULT_LINUX_CONFIG_PATH
+            if os.name == "nt":
+                default_config_path = _DEFAULT_WINDOWS_CONFIG_PATH
+            elif sys.platform.lower() == "darwin":
+                default_config_path = _DEFAULT_MACOS_CONFIG_PATH
 
-            if os.path.exists(CONFIG_PATH):
-                filepath = CONFIG_PATH
+            if os.path.exists(_CONFIG_PATH):
+                filepath = _CONFIG_PATH
             elif os.path.exists(default_config_path):
                 print(f"config.ini not found. Falling back to {default_config_path}.")
                 filepath = default_config_path
@@ -115,10 +115,3 @@ class Configuration:
             "Execution", "default_execution_parameters")
         Configuration.BACKUP_EXECUTABLE_REGEX = re.compile(config.get(
             "Execution", "backup_executable_regex"))
-
-
-    @staticmethod
-    def _is_subdirectory(path: str, directory: str) -> bool:
-        abs_path = os.path.abspath(path)
-        abs_directory = os.path.abspath(directory)
-        return os.path.commonpath([abs_path, abs_directory]) == directory

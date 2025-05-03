@@ -99,94 +99,66 @@ you should attempt to reproduce the bug. Then, either hit the MARK_GOOD or MARK_
 
 ### TODO
 
-Known Issues
-scons wants a clean build sometimes, hard to detect when
-
-Major chunks
-    3 Repro update
-    9 Bisect update
-    6 Improved MRP handling
-    8 Side memes
-
-24 - TODO
-  5 MRPs
-  - couldn't find that one MRP in the comments
+13 - TODO
+  4 MRPs
   - export command
   - MRP with arbitrary name
   - support adamscott's use case
   - support calinou's PR testing workflow
-  8 Bisect
-  - self._current_revision can be None if initial range doesn't exist
-  - handle a lack of initial range better
-  - selection of default start and end for bisect kind of sucks
-
-  - bisect error codes need to get added potentially?
-  - bisect TODOs
-  - ?autopurge during bisects
-  - BisectRunner tmp dir
-  - Make BisectRunner use argparse
-  1 Repro/Bisect
-  - launch from a better working directory if there's no project
-  2 Repro
-  - ?decide on a better default for repro commit (HEAD? latest compiled?
-  - Calls _launch_any directly
-  3 Git
-  - should probably fetch only if a ref fails to resolve that we get from the user on some commands
-  - resolve ref also fails for ambiguous refs
-  - git.get_commit_list should work for empty strings and just not bound that side
-  - git neighbor cache isn't always properly cleared
-  5 Misc
-  - purge command overhaul
-  - maybe add compression time to time estimates?
-  - launch should use a temporary directory for the wd if none is provided
-  - file paths relative to original not current!!!
-    repro/bisect --project
+  1 Bisect
+  - autopurge during bisects
+  2 Misc
   - Package the existing 2000 commits optimally
+  - purge command overhaul
+  6 Clean up
+  - VERSIONS_DIR gets used in too many places, same with other DIRS
+  - mrp_manager.update_project_title sucks
+  - Global variables
+        signal_handler has 4
+        storage has 2
+        git has 7
+        factory has 2
+  - _parse_flexible_args sucks
+  - Better output, colors, text decorations?
+  - progress bar feels a bit cluttered
 
+Testing
 
-7 Finishing touches
+15 Finishing touches
 - 1 Finalize requirements.txt
     - Windows
         Needed to manually install pyreadline3, pywinpty
-- 2 Better output, colors, text decorations?
-- 1 progress bar feels a bit cluttered
-- 1 check that get_commit_time gets the right commit time
 - 1 make precache file
-
-Clean up
-- Code clean up pass
-- Code file organization pass
-- Run a linter
-- Consistent use of _ prefixes
-- Global variables
-- VERSIONS_DIR gets used in too many places, same with other DIRS
-- update bisect command completer
-- revisit command names
-- class vs not
-- ' vs "
-- trailing whitespace
-
-Testing
+- 8 Code function level clean up pass
+- 1 Run a linter
+- 1 update bisect command completer
+- 1 revisit command names
+- 1 trailing whitespace
+- 1 update includes
 
 Documentation
 - Write README.md
     Add note about fetching
-- Write main help command
-    defaults don't show up properly in help
+- defaults don't show up properly in help
 - Update argparser help strings
-- Write help subcommand
-- Add descriptions/epilogs
+- Add descriptions/epilogs/usage strings
 - Update config files
+- Ordering in help
+- Single character arg support
 
-Maybe someday
-- Non interactive bisect mode
-- Hotkeys
-- Make more general so this isn't just a godot specific tool
-- path spec should allow you to test commits outside that set if that's the only precompiled
+Known Issues
+- `scons` is sometimes faster after a clean, not sure why. Clean automatically?
 - Corrupted binaries aren't handled at all
     - Does killing the extraction threads litter the version space?
 - SIGINT doesn't print if triggered in the middle of another print
-- Fullscreen update mode?
-- Terminal window resizing support?
-- Find commits mentioned in the issue?
 - Minor formatting issues on SIGINT while in live mode
+
+Maybe Someday
+- Non interactive bisect mode
+- Hotkeys
+- Make more general so this isn't just a godot specific tool
+- Fullscreen update mode
+- Terminal window resizing support
+- Find commits mentioned in the issue
+- More accurate estimate of remaining steps
+- Lifetime stats :D

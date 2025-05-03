@@ -8,8 +8,8 @@ from datetime import datetime, timedelta
 import requests
 from bs4 import BeautifulSoup
 
+from src import storage
 from src.config import Configuration, PrintMode
-import src.storage as storage
 
 ISSUES_URL = "https://github.com/godotengine/godot/issues/"
 MRP_FOLDER = "mrps"
@@ -47,10 +47,10 @@ def get_approx_issue_creation_time(issue: int) -> int:
     # return the timestamp a couple days after that to avoid any timezone issues
     url = ISSUES_URL + str(issue)
     response = requests.get(url, timeout=60)
-    soup = BeautifulSoup(response.content, 'html.parser')
-    body_divs = soup.find_all('div', class_=re.compile('.*issue-body.*'))
+    soup = BeautifulSoup(response.content, "html.parser")
+    body_divs = soup.find_all("div", class_=re.compile(".*issue-body.*"))
     for div in body_divs:
-        date_div = div.find('relative-time')
+        date_div = div.find("relative-time")
         if date_div is not None:
             date_text = date_div.text.strip()
             try:
@@ -66,12 +66,12 @@ def purge_all() -> int:
 
     if os.path.exists(MRP_FOLDER):
         for filename in os.listdir(MRP_FOLDER):
-            if re.match(r'^\d+\.zip$', filename):
+            if re.match(r"^\d+\.zip$", filename):
                 storage.rm(os.path.join(MRP_FOLDER, filename))
                 if Configuration.PRINT_MODE == PrintMode.VERBOSE:
                     print(f"Deleted {filename}")
                 purge_count += 1
-            elif re.match(r'^\d+$', filename):
+            elif re.match(r"^\d+$", filename):
                 storage.rm(os.path.join(MRP_FOLDER, filename))
                 if Configuration.PRINT_MODE == PrintMode.VERBOSE:
                     print(f"Deleted {filename}")
@@ -84,15 +84,6 @@ def purge_all() -> int:
         purge_count += 1
 
     return purge_count
-
-
-def get_file_count(folder: str) -> int:
-    if not os.path.exists(folder):
-        return 0
-    file_count = 0
-    for root, _, files in os.walk(folder):
-        file_count += len(files)
-    return file_count
 
 
 def extract_mrp(zip_filename: str, issue_number: int) -> str:
@@ -110,7 +101,7 @@ def extract_mrp(zip_filename: str, issue_number: int) -> str:
         shutil.rmtree(issue_mrp_folder)
 
     os.mkdir(issue_mrp_folder)
-    with zipfile.ZipFile(zip_filename, 'r') as f:
+    with zipfile.ZipFile(zip_filename, "r") as f:
         f.extractall(issue_mrp_folder)
 
     project_file = find_project_file(issue_mrp_folder)
@@ -123,7 +114,7 @@ def extract_mrp(zip_filename: str, issue_number: int) -> str:
 
 def update_project_title(project_file: str, issue_number: int) -> None:
     if Configuration.ADD_ISSUE_TO_TITLE and issue_number >= 0:
-        with open(project_file, 'r') as f:
+        with open(project_file, "r") as f:
             lines = f.readlines()
         title_line_index = -1
         application_line_index = -1
@@ -159,7 +150,7 @@ def update_project_title(project_file: str, issue_number: int) -> None:
             needs_update = True
 
         if needs_update:
-            with open(project_file, 'w') as f:
+            with open(project_file, "w") as f:
                 for line in lines:
                     if line.startswith("title="):
                         line = f"title=MRP #{issue_number}\n"
@@ -192,11 +183,12 @@ def find_project_file(folder: str, silent: bool = False) -> str:
         query = "Enter the number of the project.godot file to use, or n if none look right: "
         choice = input(query).strip().lower()
         while True:
-            if choice.startswith('n'):
+            if choice.startswith("n"):
                 return ""
             if choice.isdigit() and int(choice) < len(project_files):
                 break
-            choice = input("Invalid choice. Please enter a valid number or 'n': ").strip().lower()
+            choice = input("Invalid choice. Please enter a valid number or \"n\": ")
+            choice = choice.strip().lower()
         return project_files[int(choice)]
     elif len(project_files) == 1:
         return project_files[0]
@@ -231,7 +223,7 @@ def create_mrp(issue_number: int = -1) -> str:
 
 def create_project_file(folder: str) -> str:
     project_file = os.path.join(folder, "project.godot")
-    with open(project_file, 'a'):
+    with open(project_file, "a"):
         os.utime(project_file, None)
     update_project_title(project_file, folder)
     return project_file
@@ -240,19 +232,25 @@ def create_project_file(folder: str) -> str:
 def get_zip_links_from_issue(issue: int) -> tuple[list[str], int]:
     url = ISSUES_URL + str(issue)
     response = requests.get(url, timeout=60)
-    soup = BeautifulSoup(response.content, 'html.parser')
+    soup = BeautifulSoup(response.content, "html.parser")
     zip_links = list()
 
-    for div in soup.find_all('div', class_=re.compile('.*issue-body.*')):
-        for zip_link in div.find_all('a', href=lambda x: x and x.endswith('.zip')):
-            if zip_link['href'] not in zip_links:
-                zip_links.append(zip_link['href'])
+    for div in soup.find_all("div", class_=re.compile(".*issue-body.*")):
+        for zip_link in div.find_all("a", href=lambda x: x and x.endswith(".zip")):
+            if zip_link["href"] not in zip_links:
+                zip_links.append(zip_link["href"])
     body_links_len = len(zip_links)
 
-    for div in soup.find_all('div', class_=re.compile('.*comments-container.*')):
-        for zip_link in div.find_all('a', href=lambda x: x and x.endswith('.zip')):
-            if zip_link['href'] not in zip_links:
-                zip_links.append(zip_link['href'])
+    scan_position = 0
+    page_content = response.content.decode("utf-8")
+    while scan_position < len(page_content):
+        match = re.search(r"https://[^ ]+?\.zip", page_content[scan_position:])
+        if match is None:
+            break
+        zip_link = match.group(0)
+        if zip_link not in zip_links:
+            zip_links.append(zip_link)
+        scan_position += match.start() + len(zip_link)
 
     return zip_links, body_links_len
 
@@ -263,7 +261,7 @@ def download_zip(zip_link: str, filename: str) -> bool:
 
     try:
         response = requests.get(zip_link, timeout=60)
-        with open(filename, 'wb') as f:
+        with open(filename, "wb") as f:
             f.write(response.content)
     except requests.exceptions.RequestException as e:
         print(f"Error downloading zip file: {e}")
@@ -297,19 +295,22 @@ def get_mrp(issue: int) -> str:
         print("Zip file(s) found in issue. Please select an option.")
         for i, link in enumerate(zip_links):
             body_info = ""
-            if if len(zip_links) > body_links_len:
-                body_info = f" (in {'issue' if i < body_links_len else 'comment'})"
-            print(f"{i}" + body_info + f": {link}")
+            if len(zip_links) > body_links_len:
+                source_type = "issue" if i < body_links_len else "comment"
+                body_info = f" (in {source_type})"
+            print(str(i) + body_info + f": {link}")
         print("c: Create a new blank project")
         query = "Enter the number of the zip file to download, or c to create a blank project: "
         choice = input(query).strip().lower()
 
-        while True:
-            if choice.startswith('c') or (choice.isdigit() and int(choice) < len(zip_links)):
-                break
-            choice = input("Invalid choice. Please enter a valid number or 'c': ").strip().lower()
+        while (
+                not choice.startswith("c") 
+                and (not choice.isdigit() or int(choice) >= len(zip_links))
+            ):
+            choice = input("Invalid choice. Please enter a valid number or \"c\": ")
+            choice = choice.strip().lower()
 
-        if not choice.startswith('c'):
+        if not choice.startswith("c"):
             zip_link = zip_links[int(choice)]
             return zip_filename if download_zip(zip_link, zip_filename) else ""
     else:

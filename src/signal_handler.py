@@ -1,23 +1,22 @@
 import signal
 import sys
 
-DYING = False
-SHOULD_EXIT = False
-SHOULD_PRINT = True
-SHOULD_INSTADIE = True
-MESSAGE = "Interrupt received, exiting after this step. Send another to exit now."
-SECOND_MESSAGE = "Second interrupt received, exiting immediately..."
+_dying = False
+_should_exit = False
+_should_print = True
+_MESSAGE = "Interrupt received, exiting after this step. Send another to exit now."
+_SECOND_MESSAGE = "Second interrupt received, exiting immediately..."
 
 
 def _signal_handler(__sig, __frame) -> None:
-    global SHOULD_EXIT, DYING
-    if SHOULD_EXIT or SHOULD_INSTADIE:
-        DYING = True
-        _thread_print(MESSAGE if SHOULD_INSTADIE else SECOND_MESSAGE)
+    global _should_exit, _dying
+    if _should_exit:
+        _dying = True
+        _thread_print(_SECOND_MESSAGE)
         sys.exit(1)
-    SHOULD_EXIT = True
-    if SHOULD_PRINT:
-        _thread_print(MESSAGE)
+    _should_exit = True
+    if _should_print:
+        _thread_print(_MESSAGE)
 
 
 def _thread_print(message: str) -> None:
@@ -33,3 +32,26 @@ def _thread_print(message: str) -> None:
 
 def install() -> None:
     signal.signal(signal.SIGINT, _signal_handler)
+
+
+def get_status() -> str:
+    if _dying:
+        return _SECOND_MESSAGE
+    elif _should_exit:
+        return _MESSAGE
+    else:
+        return ""
+
+
+def clear() -> None:
+    global _should_exit, _dying
+    _should_exit = False
+    _dying = False
+
+
+def soft_killed() -> bool:
+    return _should_exit
+
+
+def hard_killed() -> bool:
+    return _dying

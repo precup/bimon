@@ -1,17 +1,17 @@
 import functools
+import heapq
 import os
 import shlex
 import subprocess
-from collections import deque, defaultdict
+from collections import defaultdict, deque
 from typing import Optional
-import heapq
 
-import src.terminal as terminal
+from src import terminal
 from src.config import Configuration
 from src.storage import STATE_DIR
 
-CACHE_NAME = os.path.join(STATE_DIR, "git_cache")
-PRECACHE_NAME = os.path.join(STATE_DIR, "git_precache")
+_CACHE_NAME = os.path.join(STATE_DIR, "git_cache")
+_PRECACHE_NAME = os.path.join(STATE_DIR, "git_precache")
 
 _commit_time_cache = {}
 _neighbor_cache = {}
@@ -19,47 +19,47 @@ _diff_cache = {}
 _diff_precache = {}
 _already_fetched = False
 _cache_loaded = True
+_diffs_added = 0
 
 
 def load_cache() -> None:
-    _load_cache(PRECACHE_NAME)
-    _load_cache(CACHE_NAME)
+    _load_cache(_PRECACHE_NAME)
+    _load_cache(_CACHE_NAME)
     global _cache_loaded
     _cache_loaded = True
 
 
 def _load_cache(cache_file_name: str) -> None:
-    try:
-        with open(cache_file_name, "r") as cache_file:
-            section = 0
-            for line in cache_file:
-                if line.startswith("#"):
-                    section += 1
-                    continue
-                parts = line.strip().split()
-                if section == 0:
-                    _commit_time_cache[parts[0]] = int(parts[1])
-                elif section == 1:
-                    src_commit, dst_commit = parts[0], parts[1]
-                    if src_commit > dst_commit:
-                        src_commit, dst_commit = dst_commit, src_commit
-                    if src_commit not in _diff_cache:
-                        _diff_cache[src_commit] = {}
-                    _diff_cache[src_commit][dst_commit] = int(parts[2])
-                elif section == 2:
-                    _neighbor_cache[parts[0]] = set(parts[1:])
-    except FileNotFoundError:
-        pass
-
-
-def save_cache() -> None:
-    if not _cache_loaded:
+    if not os.path.exists(cache_file_name):
         return
-    _save_cache(CACHE_NAME, _commit_time_cache, _diff_cache, _neighbor_cache)
+    with open(cache_file_name, "r") as cache_file:
+        section = 0
+        for line in cache_file:
+            if line.startswith("#"):
+                section += 1
+                continue
+            parts = line.strip().split()
+            if section == 0:
+                _commit_time_cache[parts[0]] = int(parts[1])
+            elif section == 1:
+                src_commit, dst_commit = parts[0], parts[1]
+                if src_commit > dst_commit:
+                    src_commit, dst_commit = dst_commit, src_commit
+                if src_commit not in _diff_cache:
+                    _diff_cache[src_commit] = {}
+                _diff_cache[src_commit][dst_commit] = int(parts[2])
+            elif section == 2:
+                _neighbor_cache[parts[0]] = set(parts[1:])
+
+
+def save_cache(overwrite: bool = False) -> None:
+    if not _cache_loaded and not overwrite:
+        return
+    _save_cache(_CACHE_NAME, _commit_time_cache, _diff_cache, _neighbor_cache)
 
 
 def save_precache() -> None:
-    _save_cache(PRECACHE_NAME, _commit_time_cache, _diff_precache, {})
+    _save_cache(_PRECACHE_NAME, _commit_time_cache, _diff_precache, {})
 
 
 def _save_cache(cache_name, commit_time_cache, diff_cache, neighbor_cache) -> None:
@@ -74,10 +74,10 @@ def _save_cache(cache_name, commit_time_cache, diff_cache, neighbor_cache) -> No
                 cache_file.write(f"{src_commit} {dst_commit} {size}\n")
         cache_file.write("#\n")
         for commit, neighbors in neighbor_cache.items():
-            cache_file.write(f"{commit} {' '.join(neighbors)}\n")
+            cache_file.write(f"{commit} {" ".join(neighbors)}\n")
 
 
-def update_neighbors(commits: Optional[set[str]] = None) -> None:
+def _update_neighbors(commits: Optional[set[str]] = None) -> None:
     neighbors = defaultdict(set)
     if commits is None or any(commit not in _neighbor_cache for commit in commits):
         lines = get_git_output(["rev-list", "--parents", "--all"]).splitlines()
@@ -92,13 +92,8 @@ def update_neighbors(commits: Optional[set[str]] = None) -> None:
         save_cache()
 
 
-def get_bulk_neighbors(all_commits: list[str]) -> dict[str, set[str]]:
-    update_neighbors(set(all_commits))
-    return {commit: _neighbor_cache[commit] for commit in all_commits}
-
-
-def get_neighbors(commit: str) -> set[str]:
-    update_neighbors([commit])
+def _get_neighbors(commit: str) -> set[str]:
+    _update_neighbors([commit])
     return _neighbor_cache[commit]
 
 
@@ -120,26 +115,30 @@ def get_similar_commit(target_commit: str, possible_commits: set[str]) -> str:
     # to the target commit, excluding the commits in exclude_commits. Uses the diffs
     # between commits as the edge weights, which may overestimate the distance, but
     # it gets results within a few percent of optimal on godot.
+    if len(possible_commits) == 0:
+        return ""
+    if len(possible_commits) == 1:
+        return list(possible_commits)[0]
     queue = []
     heapq.heappush(queue, (0, target_commit))
     best_per = {}
-    best = None
+    best = ""
     best_diff = -1
     while queue:
         total, curr = heapq.heappop(queue)
         if curr in best_per and total > best_per[curr]:
             continue
         best_per[curr] = total
-        if best is not None and total >= best_diff:
+        if best != "" and total >= best_diff:
             continue
         if curr in possible_commits:
             best_diff = total
             best = curr
             continue
-        for neighbor in get_neighbors(curr):
+        for neighbor in _get_neighbors(curr):
             diff = get_diff_size(curr, neighbor)
             neighbor_total = total + diff
-            if best is not None and neighbor_total >= best_diff:
+            if best != "" and neighbor_total >= best_diff:
                 continue
             if neighbor not in best_per or neighbor_total < best_per[neighbor]:
                 best_per[neighbor] = neighbor_total
@@ -161,20 +160,58 @@ def check_out(rev: str) -> None:
 
 def fetch() -> None:
     global _already_fetched
-    get_git_output(["fetch", "--tags", "--prune", "origin"])
-    cache_clear()
+    if _already_fetched:
+        return
+    fetch_command = ["fetch", "--tags", "--prune", "origin"]
+    fetch_output = get_git_output(fetch_command, include_err=True)
+    print("[TODO] Fetch output length:", len(fetch_output))
+    if len(fetch_output) > 0:
+        _cache_clear()
     _already_fetched = True
 
 
-def get_git_output(args: list[str]) -> str:
+def get_last_fetch_time() -> int:
+    try:
+        fetch_time = get_git_output(["show", "-s", "--format=%ct", "FETCH_HEAD"])
+        return int(fetch_time)
+    except:
+        return -1
+
+
+def get_git_output(args: list[str], include_err: bool = False) -> str:
     try:
         command = ["git", "-C", Configuration.WORKSPACE_PATH] + args
-        output = subprocess.check_output(command).strip().decode("utf-8")
+        output = subprocess.check_output(command, stderr=subprocess.STDOUT)
+        output = output.decode("utf-8").strip()
         if len(output) > 0 and output[0] == '"' and output[-1] == '"':
             output = output[1:-1]
         return output
     except subprocess.CalledProcessError:
         return ""
+
+
+def get_bounded_commits(
+        ancestors: set[str], 
+        descendants: set[str], 
+        path_spec: str = "", 
+        before: int = -1) -> set[str]:
+    command = ["rev-list"]
+
+    if before >= 0:
+        command += [f"--before={before}"]
+
+    if len(decendants) == 0:
+        command += ["--all"]
+    else:
+        command += [f"{descendant}" for descendant in descendants]
+
+    if len(ancestors) > 0:
+        command += ["--not"] + [f"{ancestor}^" for ancestor in ancestors]
+    
+    if path_spec != "":
+        command += ["--"] + shlex.split(path_spec)
+    
+    return set(get_git_output(command).split())
 
 
 def get_commit_time(ref: str) -> int:
@@ -211,14 +248,14 @@ def get_short_name(ref: str, plain: bool = False) -> str:
     commit = resolve_ref(ref)
     if len(commit) == 0:
         return ref if plain else terminal.color_bad(ref)
-    command = ["log", '--pretty=format:"%h"', commit, "-n", "1", "--abbrev-commit"]
+    command = ["log", "--pretty=format:\"%h\"", commit, "-n", "1", "--abbrev-commit"]
     short_name = get_git_output(command)
     return short_name if plain else terminal.color_ref(short_name)
 
 
 @functools.lru_cache
 def get_short_log(ref: str) -> str:
-    command = ["log", '--pretty=format:"%s"', ref, "-n", "1", "--abbrev-commit"]
+    command = ["log", "--pretty=format:\"%s\"", ref, "-n", "1", "--abbrev-commit"]
     commit_message = get_git_output(command)
     return get_short_name(ref) + " " + commit_message
 
@@ -233,6 +270,7 @@ def resolve_ref(ref: str, fetch_if_missing: bool = False) -> str:
     return commit
 
 
+# TODO the refs should be optional, empty string sentinels are ugly here
 def get_commit_list(
         start_ref: str, 
         end_ref: str, 
@@ -285,12 +323,8 @@ def get_bisect_commits(
     return [line.strip().split()[0] for line in output.splitlines() if len(line.strip()) > 0]
 
 
-def get_local_changes() -> bool:
-    return [line.strip() for line in get_git_output(["add", "-An"]).strip().splitlines()]
-
-
 def has_local_changes() -> bool:
-    return len("".join(get_local_changes())) > 0
+    return len(get_git_output(["add", "-An"]).strip()) > 0
 
 
 def clear_local_changes() -> None:
@@ -310,7 +344,6 @@ def is_ancestor(possible_ancestor_ref: str, possible_descendant_ref: str) -> boo
     )
 
 
-_diffs_added = 0
 def get_diff_size(commit_src: str, commit_dst: str) -> int:
     if commit_src > commit_dst:
         commit_src, commit_dst = commit_dst, commit_src
@@ -350,8 +383,29 @@ def _get_diff_size(ref_src: str, ref_dst: str) -> int:
         return 0
 
 
-def cache_clear() -> None:
-    # TODO doesn't properly clear neighbor cache which may need new children
+def minimal_parents(parents: set[str]) -> set[str]:
+    return set(
+        commit for commit in parents 
+        if all(
+            not git.is_ancestor(test_commit, commit) 
+            for test_commit in parents if commit != test_commit
+        )
+    )
+
+
+def minimal_children(children: set[str]) -> set[str]:
+    return set(
+        commit for commit in children
+        if all(
+            not git.is_ancestor(commit, test_commit) 
+            for test_commit in children if commit != test_commit
+        )
+    )
+
+
+def _cache_clear() -> None:
+    _neighbor_cache.clear()
+    _update_neighbors(None)
     _get_commit_list.cache_clear()
     get_short_name.cache_clear()
     get_short_log.cache_clear()

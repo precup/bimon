@@ -2,25 +2,28 @@ import glob
 import os
 import shlex
 import shutil
+import stat
 import sys
 import time
-import stat
 from typing import Optional
 
-import src.git as git
-import src.signal_handler as signal_handler
-import src.storage as storage
-import src.terminal as terminal
+from src import git
+from src import signal_handler
+from src import storage
+from src import terminal
 from src.config import Configuration, PrintMode
 
-MIN_SUCCESSES = 3
-error_commits = set()
+_MIN_SUCCESSES = 3
+_bundles_packed = 0
+_compress_time = 0
 
 
 def compress(
         compiled_versions: list[str], 
         retry: bool = False, 
         compress_all: bool = False) -> bool:
+    global _bundles_packed, _compress_time
+    start_time = time.time()
     compiled_versions_set = set(compiled_versions)
     unbundled_versions = set(storage.get_unbundled_versions())
     version_list = [version for version in compiled_versions if version in unbundled_versions]
@@ -38,8 +41,10 @@ def compress(
         bundle = version_list[i:i + Configuration.BUNDLE_SIZE]
         if len(bundle) == Configuration.BUNDLE_SIZE or compress_all:
             bundles.append(bundle)
+    _compress_time += time.time() - start_time
             
     for i, bundle in enumerate(bundles):
+        start_time = time.time()
         bundle_id = bundle[0] + ".tar.zst"
         print(f"Compressing bundle {i + 1} / {len(bundles)}")
         bundled = storage.compress_bundle(bundle_id, bundle)
@@ -50,7 +55,9 @@ def compress(
             if not bundled:
                 print("Failed to compress all bundles.")
                 return False
-        if signal_handler.SHOULD_EXIT:
+        _bundles_packed += 1
+        _compress_time += time.time() - start_time
+        if signal_handler.soft_killed():
             break
     return True
 
@@ -64,11 +71,11 @@ def compile_uncached(ref: str) -> bool:
     _handle_local_changes()
 
     git.check_out(ref)
-    error_code = single()
+    error_code = _run_scons()
     return error_code == 0
 
 
-def split_list(lst: list, x: int) -> list[list]:
+def _split_list(lst: list, x: int) -> list[list]:
     avg_size = len(lst) // x
     remainder = len(lst) % x
 
@@ -83,7 +90,7 @@ def split_list(lst: list, x: int) -> list[list]:
     return parts
 
 
-def get_remaining_time_str(job_count: int, average_time: float, processed_count: int) -> str:
+def _get_remaining_time_str(job_count: int, average_time: float, processed_count: int) -> str:
     remaining_time_str = "--:--"
     if average_time > 0:
         remaining_time = int(average_time * (job_count - processed_count) + 0.99)
@@ -100,7 +107,7 @@ def get_remaining_time_str(job_count: int, average_time: float, processed_count:
     return terminal.color_key(remaining_time_str)
 
 
-def print_compile_status(
+def _print_compile_status(
         tags: list[str], 
         full_commit_list: list[str], 
         present_versions: set[str], 
@@ -113,31 +120,34 @@ def print_compile_status(
     title = terminal.color_key(f" Compiling #{processed_count + 1} of {len(job_commits)} ")
     print(terminal.box_top(title=title))
     
-    average_time = sum(times.values()) / len(times) if times else 0
+    average_time = 0
+    if len(times) > 0:
+        average_time = sum(times.values()) / len(times)
+        average_time += _compress_time / max(1, _bundles_packed) / Configuration.BUNDLE_SIZE
     average_time_str = "--:--"
     if average_time > 0:
         seconds = int(round(average_time)) % 60
         minutes = int(round(average_time)) // 60
         average_time_str = f"{minutes:02}:{seconds:02}"
-    remaining_time_str = get_remaining_time_str(len(job_commits), average_time, processed_count)
+    remaining_time_str = _get_remaining_time_str(len(job_commits), average_time, processed_count)
     error_str = terminal.color_good("0")
     if len(error_commits) > 0:
         error_str = terminal.color_bad(f"{len(error_commits)}")
-    print(terminal.box_fit(f"Average time: {average_time_str},"
+    print(terminal.box_content(f"Average time: {average_time_str},"
         + f" Remaining time: {remaining_time_str}, Errors: {error_str}"))
 
-    print(terminal.box_fit(
-        terminal.trim_str(f"Current commit: {git.get_short_log(current_commit)}", cols - 4)
+    print(terminal.box_content(
+        terminal.trim_to_line(f"Current commit: {git.get_short_log(current_commit)}", cols - 4)
     ))
 
     fraction_done = float(processed_count) / max(1, len(job_commits))
     progress_bar = "Job progress (" + terminal.color_key(f"{int(fraction_done * 100):2d}%") + "): "
-    progress_bar_length = cols - 4 - terminal.escape_len(progress_bar)
+    progress_bar_length = cols - 4 - terminal.non_ansi_len(progress_bar)
     progress_bar += terminal.progress_bar(progress_bar_length, fraction_done)
-    print(terminal.box_fit(progress_bar))
-    print(terminal.box_fit(""))
+    print(terminal.box_content(progress_bar))
+    print(terminal.box_content(""))
 
-    current_bucket = print_histogram(
+    current_bucket = _print_histogram(
         cols=cols, 
         full_commit_list=full_commit_list, 
         tags=tags, 
@@ -154,7 +164,7 @@ def print_compile_status(
     print(bottom)
 
 
-def get_fraction_completed(commit_list: list[str], present_versions: set[str]) -> float:
+def _get_fraction_completed(commit_list: list[str], present_versions: set[str]) -> float:
     if not Configuration.IGNORE_OLD_ERRORS:
         compiler_error_commits = storage.get_compiler_error_commits()
         commit_list = [commit for commit in commit_list if commit not in compiler_error_commits]
@@ -162,7 +172,7 @@ def get_fraction_completed(commit_list: list[str], present_versions: set[str]) -
     return len(present_commits) / max(1, len(commit_list))
 
 
-def build_tag_line(tag_times: dict[str, int], bucket_times: list[int]) -> str:
+def _build_tag_line(tag_times: dict[str, int], bucket_times: list[int]) -> str:
     tag_buckets = {
         tag: [
             i for i in range(len(bucket_times)) 
@@ -196,7 +206,7 @@ def build_tag_line(tag_times: dict[str, int], bucket_times: list[int]) -> str:
     return tag_output
 
 
-def print_histogram(
+def _print_histogram(
         cols: int, 
         full_commit_list: list[str], 
         tags: list[str], 
@@ -206,10 +216,10 @@ def print_histogram(
     full_commit_list = [commit for commit in full_commit_list if commit not in ignored_commits]
     if len(full_commit_list) == 0:
         return None
-    full_percent = get_fraction_completed(full_commit_list, present_versions) * 100
+    full_percent = _get_fraction_completed(full_commit_list, present_versions) * 100
     print(terminal.box_middle(title=f" Full Range Histogram ({full_percent:.1f}%)"))
 
-    bucket_commits = split_list(full_commit_list, cols - 4)
+    bucket_commits = _split_list(full_commit_list, cols - 4)
     bucket_fractions = [
         len(set(bucket_commits[j]) & present_versions) / max(1, len(bucket_commits[j]))
         for j in range(len(bucket_commits))
@@ -230,8 +240,8 @@ def print_histogram(
             commit_times[bucket[0]] if len(bucket) > 0 else -1
             for bucket in bucket_commits
         ]
-        tag_line = build_tag_line(tag_times, bucket_times)
-        print(terminal.box_fit(tag_line))
+        tag_line = _build_tag_line(tag_times, bucket_times)
+        print(terminal.box_content(tag_line))
         current_commit_time = git.get_commit_time(current_commit)
         possible_current_buckets = [
             i for i in range(len(bucket_fractions)) 
@@ -243,9 +253,9 @@ def print_histogram(
             i for i, revs in enumerate(bucket_commits) if current_commit in revs
         ]
 
-    print(terminal.box_fit(terminal.histogram_height(bucket_fractions)))
+    print(terminal.box_content(terminal.histogram_height(bucket_fractions)))
     if Configuration.COLOR_ENABLED:
-        print(terminal.box_fit(terminal.histogram_color(bucket_fractions)))
+        print(terminal.box_content(terminal.histogram_color(bucket_fractions)))
     return possible_current_buckets[0] if len(possible_current_buckets) > 0 else None
 
 
@@ -263,6 +273,7 @@ def compile(commits: list[str], retry_compress: bool = True, fatal_compress: boo
     compiled_versions = []
     processable_commits = set(commits) - present_versions
     commit = commits[0]
+    error_commits = set()
     while len(error_commits) + len(compiled_versions) < len(commits):
         i = len(error_commits) + len(compiled_versions)
         if i > 0:
@@ -272,7 +283,7 @@ def compile(commits: list[str], retry_compress: bool = True, fatal_compress: boo
         if Configuration.PRINT_MODE == PrintMode.QUIET:
             print(f"Compiling commit {commit} ({i + 1} / {len(commits)})")
         else:
-            print_compile_status(
+            _print_compile_status(
                 tags=tags, 
                 full_commit_list=full_commit_list, 
                 present_versions=present_versions, 
@@ -285,9 +296,9 @@ def compile(commits: list[str], retry_compress: bool = True, fatal_compress: boo
 
         processable_commits.remove(commit)
         git.check_out(commit)
-        did_compile = single()
+        did_compile = _run_scons()
         if not did_compile:
-            if len(compiled_versions) >= MIN_SUCCESSES:
+            if len(compiled_versions) >= _MIN_SUCCESSES:
                 print(f"Error while compiling commit {commit}.")
                 print("Adding to the compile_error_commit file so it's skipped in the future.")
                 print("If you fix its build, you should remove it from the file"
@@ -299,7 +310,7 @@ def compile(commits: list[str], retry_compress: bool = True, fatal_compress: boo
         cache()
         present_versions.add(commit)
         compiled_versions.append(commit)
-        if len(compiled_versions) == MIN_SUCCESSES and len(error_commits) > 0:
+        if len(compiled_versions) == _MIN_SUCCESSES and len(error_commits) > 0:
             print("Enough successful compilations have occurred to show that errors"
                 + " are specific to certain commits.")
             print("The following commits will be skipped in the future:")
@@ -312,7 +323,7 @@ def compile(commits: list[str], retry_compress: bool = True, fatal_compress: boo
                 
         times[commit] = time.time() - start_time
 
-        if signal_handler.SHOULD_EXIT:
+        if signal_handler.soft_killed():
             return True
 
         enough_compiled_for_compress = i % (Configuration.BUNDLE_SIZE * 2) == 0 and i > 0
@@ -324,7 +335,7 @@ def compile(commits: list[str], retry_compress: bool = True, fatal_compress: boo
                 else:
                     print("WARNING: Compression failed, continuing compilation anyways.")
 
-        if signal_handler.SHOULD_EXIT:
+        if signal_handler.soft_killed():
             return True
 
     return not Configuration.COMPRESSION_ENABLED or compress(compiled_versions, retry_compress)
@@ -361,7 +372,7 @@ def cache() -> None:
     print(f"Version {version_name} has been successfully cached.")
 
 
-def single() -> bool:
+def _run_scons() -> bool:
     return terminal.execute_in_subwindow(
         command=["scons"] + shlex.split(Configuration.COMPILER_FLAGS),
         title="scons",

@@ -1,6 +1,7 @@
-from concurrent.futures import ThreadPoolExecutor, Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from threading import Lock
 from typing import Callable
+
 
 class PooledExecutor:
     def __init__(self, pool_size: int, task_fn: Callable) -> None:

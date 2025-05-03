@@ -9,11 +9,11 @@ import sys
 import time
 from typing import Optional
 
-import src.signal_handler as signal_handler
+from src import signal_handler
 from src.config import Configuration, PrintMode
 from src.storage import STATE_DIR
 
-if os.name == 'nt':
+if os.name == "nt":
     from pyreadline3 import Readline
     readline = Readline()
     from src.winpty import PtyProcess
@@ -21,18 +21,19 @@ else:
     import readline
     from ptyprocess import PtyProcessUnicode as PtyProcess
 
-ADD_TO_HISTORY = os.name == 'nt'
 DEFAULT_OUTPUT_WIDTH = 80
-HISTORY_FILE = os.path.join(STATE_DIR, "history")
-UNICODE_BAR_PARTS = " ▏▎▍▌▋▊▉█"
-C437_BAR_PARTS = " ▌█"
-HEIGHT_EIGHTHS = " ▁▂▃▄▅▆▇█"
-UNICODE_HEIGHT_PARTS = " ▁▂▃▄▅▆▇█"
-C437_HEIGHT_PARTS = " ░▒▓█"
 ANSI_RESET = "\033[0m"
-ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-TELEPORT_RE = re.compile(r'\x1b\[\d+;(\d+)H')
-ANSI_COLOR_MAP = {
+ANSI_CLEAR_LINE = "\033[2K"
+
+_HISTORY_FILE = os.path.join(STATE_DIR, "history")
+_UNICODE_BAR_PARTS = " ▏▎▍▌▋▊▉█"
+_C437_BAR_PARTS = " ▌█"
+_HEIGHT_EIGHTHS = " ▁▂▃▄▅▆▇█"
+_UNICODE_HEIGHT_PARTS = " ▁▂▃▄▅▆▇█"
+_C437_HEIGHT_PARTS = " ░▒▓█"
+_ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_TELEPORT_RE = re.compile(r"\x1b\[\d+;(\d+)H")
+_ANSI_COLOR_MAP = {
     "black": "0;30",
     "red": "0;91",
     "green": "0;92",
@@ -58,7 +59,7 @@ ANSI_COLOR_MAP = {
     "dark cyan": "0;36",
     "dark white": "0;37",
 }
-ANSI_BG_COLOR_MAP = {
+_ANSI_BG_COLOR_MAP = {
     "black": "0;100",
     "red": "0;101",
     "green": "0;102",
@@ -80,15 +81,15 @@ ANSI_BG_COLOR_MAP = {
 
 def init_terminal() -> None:
     if sys.stdin.isatty():
+        try:
+            readline.read_history_file(_HISTORY_FILE)
+        except FileNotFoundError:
+            pass
+        atexit.register(readline.write_history_file, _HISTORY_FILE)
         if os.name == "nt":
             _windows_enable_ANSI(1)
             _windows_enable_ANSI(2)
-        try:
-            readline.read_history_file(HISTORY_FILE)
-        except FileNotFoundError:
-            pass
-        atexit.register(readline.write_history_file, HISTORY_FILE)
-        if not ADD_TO_HISTORY:
+        else:
             readline.set_auto_history(True)
 
 
@@ -106,21 +107,21 @@ def _windows_enable_ANSI(std_id):
 
     GetStdHandle = WINFUNCTYPE(
         HANDLE,
-        DWORD)(('GetStdHandle', windll.kernel32))
+        DWORD)(("GetStdHandle", windll.kernel32))
 
     GetFileType = WINFUNCTYPE(
         DWORD,
-        HANDLE)(('GetFileType', windll.kernel32))
+        HANDLE)(("GetFileType", windll.kernel32))
 
     GetConsoleMode = WINFUNCTYPE(
         BOOL,
         HANDLE,
-        POINTER(DWORD))(('GetConsoleMode', windll.kernel32))
+        POINTER(DWORD))(("GetConsoleMode", windll.kernel32))
 
     SetConsoleMode = WINFUNCTYPE(
         BOOL,
         HANDLE,
-        DWORD)(('SetConsoleMode', windll.kernel32))
+        DWORD)(("SetConsoleMode", windll.kernel32))
 
     if std_id == 1:       # stdout
         h = GetStdHandle(-11)
@@ -147,7 +148,7 @@ def _windows_enable_ANSI(std_id):
 
 
 def add_to_history(command: str) -> None:
-    if ADD_TO_HISTORY:
+    if os.name == "nt":
         readline.add_history(command)
 
 
@@ -169,26 +170,23 @@ def _execute_in_subwindow_pty(
     output_lines = [""]
     lines_printed = 0
     top = box_top(bold=False, title=title)
-    if eat_kill and signal_handler.SHOULD_EXIT:
-        signal_handler.SHOULD_EXIT = False
-        process.kill(signal.SIGINT)
-    should_exit = False
-    bottom = box_bottom(bold=False, title=signal_handler.MESSAGE if should_exit else "")
+    bottom = box_bottom(bold=False, title=signal_handler.status())
     rows -= 2
     ansi_codes_seen = set()
+    already_soft_killed = False
 
     while process.isalive():
         try:
             stdout_chunk = process.read(1024)
             if len(stdout_chunk) > 0:
-                lines = stdout_chunk.split('\n')
+                lines = stdout_chunk.split("\n")
                 if len(lines) == 1:
                     old_lines = split_to_display_lines(output_lines[-1], cols)
                     new_lines = split_to_display_lines(output_lines[-1] + lines[0], cols)
                     if len(old_lines) == len(new_lines):
                         output_lines[-1] += lines[0]
                         line_text = "".join(new_lines[-1][0]) + new_lines[-1][1]
-                        print(ANSI_RESET + "\033[2K" + line_text, end="")
+                        print(ANSI_RESET + ANSI_CLEAR_LINE + line_text, end="")
                         sys.stdout.flush()
                         continue
                 output_lines[-1] += lines[0]
@@ -211,15 +209,14 @@ def _execute_in_subwindow_pty(
                 break
             window_lines = split_lines + window_lines
 
-        if signal_handler.SHOULD_EXIT and not should_exit:
+        if signal_handler.soft_killed() and not already_soft_killed:
             if eat_kill:
-                signal_handler.SHOULD_EXIT = False
+                signal_handler.clear()
                 process.kill(signal.SIGINT)
-            elif not signal_handler.DYING:
-                should_exit = signal_handler.SHOULD_EXIT
-                bottom = box_bottom(bold=False, title=signal_handler.MESSAGE)
-                move_rows_up(1)
-                print("", end="\r")
+            elif not signal_handler.hard_killed():
+                already_soft_killed = True
+                bottom = box_bottom(bold=False, title=signal_handler.status())
+                print(move_rows_up(1), end="\r")
                 sys.stdout.flush()
             else:
                 print()
@@ -227,10 +224,10 @@ def _execute_in_subwindow_pty(
         prev_lines_printed = lines_printed
         lines_printed = max(1, len(window_lines))
         center = "\n".join(
-            "\033[2K" + "".join(ansi_stack) + line_text 
+            ANSI_CLEAR_LINE + "".join(ansi_stack) + line_text 
             for ansi_stack, line_text in window_lines
         )
-        ansi_codes_seen.update({match.group() for match in ANSI_ESCAPE.finditer(center)})
+        ansi_codes_seen.update({match.group() for match in _ANSI_ESCAPE.finditer(center)})
         output = (
             (f"\033[{prev_lines_printed}A\r" if prev_lines_printed > 0 else "") 
             + ANSI_RESET + top + "\n" 
@@ -242,7 +239,7 @@ def _execute_in_subwindow_pty(
 
     process.wait()
     if lines_printed > 0:
-        move_rows_down(2)
+        print("\n")
     # print("Ansicodes seen:", ansi_codes_seen)
     if process.exitstatus != 0:
         print("Dumping full process log because an error occurred:")
@@ -298,13 +295,16 @@ def execute_in_subwindow(
 
 
 def split_to_display_lines(text: str, columns: int) -> list[tuple[list[str], str]]:
+    # Returns a list of tuples, where each tuple is a list of ANSI codes and a line
+    # The list of ANSI codes is the stack of codes that are currently active at the 
+    # start of the line
     if text == "":
         return [([], "")]
     # re.match(r"\x1b\[\d+C", line) happens sometimes too but I don't really care
-    text = TELEPORT_RE.sub('\n', text)
-    text = text.replace("\x1b[2J", "\x1b[2K")
-    text = text.replace("\x1b[H", "\r")
-    re_matches = ANSI_ESCAPE.finditer(text)
+    text = _TELEPORT_RE.sub("\n", text)
+    text = text.replace("\033[2J", ANSI_CLEAR_LINE)
+    text = text.replace("\033[H", "\r")
+    re_matches = _ANSI_ESCAPE.finditer(text)
     matches = [(m.start(), m.end()) for m in re_matches]
     match_i = 0
     lines = []
@@ -321,7 +321,7 @@ def split_to_display_lines(text: str, columns: int) -> list[tuple[list[str], str
             continue
 
         current_line_length += 1
-        if c == '\r':
+        if c == "\r":
             current_line_length = 0
         elif c == "\n" or current_line_length > columns:
             lines.append((list(ansi_stack), current_line[:-1]))
@@ -335,8 +335,8 @@ def split_to_display_lines(text: str, columns: int) -> list[tuple[list[str], str
     return lines
 
 
-def trim_str(text: str, columns: int) -> str:
-    re_matches = ANSI_ESCAPE.finditer(text)
+def trim_to_line(text: str, columns: int) -> str:
+    re_matches = _ANSI_ESCAPE.finditer(text)
     matches = [(m.start(), m.end()) for m in re_matches]
     match_i = 0
     current_line = ""
@@ -350,7 +350,7 @@ def trim_str(text: str, columns: int) -> str:
             continue
 
         current_line_length += 1
-        if c == '\r':
+        if c == "\r":
             current_line_length = 0
         if c == "\n" or current_line_length > columns:
             current_line = current_line[:-1]
@@ -358,28 +358,22 @@ def trim_str(text: str, columns: int) -> str:
     return current_line + (ANSI_RESET if len(matches) > 0 else "")
 
 
-def fit_line(text: str, columns: int = 0, start: str = "", end: str = "") -> str:
+def box_content(text: str, columns: int = 0, bold: bool = True) -> str:
+    box_side = "┃" if bold else "│"
+    start = box_side + " "
+    end = " " + box_side
+
     if columns == 0:
         columns = get_cols()
-
-    if len(start) > 0:
-        start += " "
-    if len(end) > 0:
-        end = " " + end
-    columns -= escape_len(start) + escape_len(end)
+    columns -= 4
 
     lines = split_to_display_lines(text, columns)
     escaped_lines = []
     for line in lines:
         ansi_stack, line_text = line
         line_text = "".join(ansi_stack) + line_text
-        escaped_lines.append(start + line_text + " " * (columns - escape_len(line_text)) + end)
+        escaped_lines.append(start + line_text + " " * (columns - non_ansi_len(line_text)) + end)
     return "\n".join(escaped_lines)
-
-
-def box_fit(text: str, columns: int = 0, bold: bool = True) -> str:
-    box_side = "┃" if bold else "│"
-    return fit_line(text, columns, box_side, box_side)
 
 
 def box_top(bold: bool = True, title: str = "") -> str:
@@ -396,13 +390,6 @@ def box_middle(bold: bool = True, title: str = "") -> str:
     return box_generic(chars, title)
 
 
-def box_generic(lmr_chars: str, title: str = "") -> str:
-    columns = get_cols()
-    # Adjust the width for the box borders
-    inner_width = columns - 3 - escape_len(title)
-    return lmr_chars[:2] + title + lmr_chars[1] * (inner_width) + lmr_chars[2]
-
-
 def box_bottom(bold: bool = True, title: str = "") -> str:
     chars = "└─┘"
     if bold:
@@ -410,14 +397,21 @@ def box_bottom(bold: bool = True, title: str = "") -> str:
     return box_generic(chars, title)
 
 
-def escape_len(text: str) -> int:
-    return len(ANSI_ESCAPE.sub("", text))
+def box_generic(lmr_chars: str, title: str = "") -> str:
+    columns = get_cols()
+    # Adjust the width for the box borders
+    inner_width = columns - 3 - non_ansi_len(title)
+    return lmr_chars[:2] + title + lmr_chars[1] * (inner_width) + lmr_chars[2]
+
+
+def non_ansi_len(text: str) -> int:
+    return len(_ANSI_ESCAPE.sub("", text))
 
 
 def progress_bar(cols: int, fraction: float) -> str:
     fraction = max(min(1, fraction), 0)
     start_chars = int(cols * fraction)
-    bar_parts = UNICODE_BAR_PARTS if Configuration.UNICODE_ENABLED else C437_BAR_PARTS
+    bar_parts = _UNICODE_BAR_PARTS if Configuration.UNICODE_ENABLED else _C437_BAR_PARTS
     segments = len(bar_parts) - 1
     center_part = int(cols * fraction * segments) % segments
     end_chars = cols - start_chars - 1
@@ -427,7 +421,7 @@ def progress_bar(cols: int, fraction: float) -> str:
 
 
 def histogram_height(fractions: list[float]) -> str:
-    bar_parts = UNICODE_HEIGHT_PARTS if Configuration.UNICODE_ENABLED else C437_HEIGHT_PARTS
+    bar_parts = _UNICODE_HEIGHT_PARTS if Configuration.UNICODE_ENABLED else _C437_HEIGHT_PARTS
     output = ""
     segments = len(bar_parts) - 1
     for fraction in fractions:
@@ -439,7 +433,7 @@ def histogram_height(fractions: list[float]) -> str:
     return color_bg(output, Configuration.PROGRESS_BACKGROUND_COLOR)
 
 
-def blend_colors(color1: str, color2: str, fraction: float) -> str:
+def _blend_colors(color1: str, color2: str, fraction: float) -> str:
     if "38;2" in color1 and "38;2" in color2:
         color1 = color1.split(";")
         color2 = color2.split(";")
@@ -455,44 +449,25 @@ def blend_colors(color1: str, color2: str, fraction: float) -> str:
 def histogram_color(fractions: list[float]) -> str:
     output = ""
     colors = Configuration.HEATMAP_COLORS
-    if len(colors) == 0:
-        colors = ["white", "white"]
-    elif len(colors) == 1:
-        colors = [colors[0], colors[0]]
+    if len(colors) < 2:
+        colors = ["white" if len(colors) == 0 else colors[0]] * 2
     use_first = "38;2" in colors[0] and "38;2" in colors[1]
     for fraction in fractions:
         color_index = max(min(1, fraction), 0) * (len(colors) - 1 - (0 if use_first else 1))
         if fraction > 0 and not use_first:
             color_index += 1
         blend_index = min(len(colors) - 1, int(color_index) + 1)
-        bucket_color = blend_colors(colors[int(color_index)], colors[blend_index], color_index % 1)
-        output += color(C437_HEIGHT_PARTS[-1], bucket_color)
+        bucket_color = _blend_colors(
+            colors[int(color_index)], 
+            colors[blend_index], 
+            color_index % 1
+        )
+        output += color(_C437_HEIGHT_PARTS[-1], bucket_color)
     return output
 
 
-def move_rows_up(n: int) -> None:
-    if Configuration.PRINT_MODE == PrintMode.LIVE and n > 0:
-        print(f"\033[{n}A", end="")
-
-
-def move_rows_down(n: int) -> None:
-    if Configuration.PRINT_MODE == PrintMode.LIVE and n > 0:
-        print("\n" * n, end="")
-
-
-def move_cursor_to(x: int, y: int) -> None:
-    if Configuration.PRINT_MODE == PrintMode.LIVE:
-        print(f"\033[{y};{x}H", end="")
-
-
-def move_to_column(n: int) -> None:
-    if Configuration.PRINT_MODE == PrintMode.LIVE:
-        print(f"\033[{n}G", end="")
-
-
-def clear_line() -> None:
-    if Configuration.PRINT_MODE == PrintMode.LIVE:
-        print("\033[2K", end="")
+def move_rows_up(n: int) -> str:
+    return f"\033[{n}A"
 
 
 def color(text: str, color_str: str) -> str:
@@ -500,12 +475,12 @@ def color(text: str, color_str: str) -> str:
         return text
     if len(color_str) > 1 and color_str[-1].isdigit():
         pass # ANSI code, pass directly in
-    elif color_str in ANSI_COLOR_MAP:
-        color_str = ANSI_COLOR_MAP[color_str]
+    elif color_str in _ANSI_COLOR_MAP:
+        color_str = _ANSI_COLOR_MAP[color_str]
     else:
         print(f"Recoverable internal error: unknown color {color_str} requested.")
         return text
-    return color_by_code(text, color_str)
+    return _color_by_code(text, color_str)
 
 
 def color_bg(text: str, color_str: str) -> str:
@@ -513,18 +488,18 @@ def color_bg(text: str, color_str: str) -> str:
         return text
     if len(color_str) > 1 and color_str[-1].isdigit():
         pass # ANSI code, pass directly in
-    elif color_str in ANSI_BG_COLOR_MAP:
-        color = ANSI_BG_COLOR_MAP[color_str]
+    elif color_str in _ANSI_BG_COLOR_MAP:
+        color = _ANSI_BG_COLOR_MAP[color_str]
     else:
         print(f"Recoverable internal error: unknown color {color_str} requested.")
         return text
-    return color_by_code(text, color_str)
+    return _color_by_code(text, color_str)
 
 
-def color_by_code(text: str, color_code: str) -> str:
+def _color_by_code(text: str, color_code: str) -> str:
     if not Configuration.COLOR_ENABLED:
         return text
-    return f"\033[{color_code}m{text}\033[0m"
+    return f"\033[{color_code}m{text}" + ANSI_RESET
 
 
 def color_bad(text: str) -> str:
@@ -548,4 +523,4 @@ def warn(text: str) -> str:
 
 
 def error(text: str) -> str:
-    return color("[WARNING]", Configuration.ERROR_COLOR) + " " + text
+    return color("[ERROR]", Configuration.ERROR_COLOR) + " " + text
