@@ -98,7 +98,6 @@ def get_bimon_parser() -> ArgumentParser:
             discard=args.discard,
             issue=args.issue, 
             project=args.project, 
-            version=args.version, 
             ref=args.ref,
             flexible_args=args.flexible_args))
 
@@ -153,16 +152,18 @@ def get_bimon_parser() -> ArgumentParser:
         "Delete all downloaded projects. Use with caution.")
     purge_parser.add_argument("--loose-files", action="store_true", help=
         "Delete any unrecognized files in the versions directory. Use with caution.")
+    purge_parser.add_argument("--dry-run", action="store_true", help=
+        "")
     add_messages("purge", purge_parser)
     purge_parser.set_defaults(func=lambda args: 
         commands.purge_command(
             projects=args.projects, 
-            downloads=args.downloads, 
             duplicates=args.duplicates, 
             caches=args.caches, 
             temp_files=args.temp_files, 
             loose_files=args.loose_files, 
-            build_artifacts=args.build_artifacts))
+            build_artifacts=args.build_artifacts,
+            dry_run=args.dry_run))
 
     # Plumbing commands
     compile_parser = subparsers.add_parser("compile", help=
@@ -239,17 +240,16 @@ def add_bisect_parser(parent_parser: ArgumentParser, interactive: bool) -> None:
             "Show this help message and exit.")
         help_messages.append((command, parser.format_usage(), parser.format_help()))
 
+    # TODO mypy is yelling about this?
     parser = parent_parser.add_subparsers(
         dest=("" if interactive else "sub") + "command",
         required=not interactive, 
-        description="Any command that takes commits also accepts any git reference"
+        description=("Any command that takes commits also accepts any git reference"
         + " and defaults to the current commit if none are provided."
-        + " Good, bad, skip, and unmark may be combined in one line.",
-        epilog="Any unique prefix of a command is acceptable."
-        + " For example, \"g\" is equivalent to \"good\".",
-        add_help=False,
+        + " Good, bad, skip, and unmark may be combined in one line."
+        + "Any unique prefix of a command is acceptable."
+        + " For example, \"g\" is equivalent to \"good\"."),
     )
-    add_messages("", parser)
 
     if not interactive:
         parser_start = parser.add_parser("start", add_help=False, help=
@@ -277,10 +277,13 @@ def add_bisect_parser(parent_parser: ArgumentParser, interactive: bool) -> None:
         parser_pause.set_defaults(func=lambda bisector, _: 
             bisector.autoopen_command(False))
 
-        parser_exit = parser.add_parser("exit", "quit", add_help=False, help=
+        parser_exit = parser.add_parser("exit", add_help=False, help=
             "Exit interactive bisect.")
         add_messages("exit", parser_exit)
         parser_exit.set_defaults(func=lambda bisector, _: 
+            bisector.exit_command())
+        parser_quit = parser.add_parser("quit", add_help=False, help=SUPPRESS)
+        parser_quit.set_defaults(func=lambda bisector, _: 
             bisector.exit_command())
 
     parser_good = parser.add_parser("good", add_help=False, help=

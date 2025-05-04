@@ -100,12 +100,27 @@ you should attempt to reproduce the bug. Then, either hit the MARK_GOOD or MARK_
 ### TODO
 
 8 - TODO
-  2 MRPs
-  - MRP with arbitrary name
-  - support adamscott's use case
-        How do I pass a name and a project to repro and bisect cleanly?
-  1 Bisect
-  - autopurge during bisects
+  - How do I pass a name and a project to repro and bisect cleanly?
+  - allow running scripts
+        script command
+        accepts a path, which is run repeatedly
+        the script itself is passed in as args:
+         - the commit sha
+         - the executable path for that commit
+         - the arguments passed to the script command after the path
+    instead of using a script, if you could just run a python snippet on the output maybe that's good enough?
+    bisect crashes on bad command
+    command prefixes aren't valid
+    ambiguous revs are still broken (594d6)
+    how many compiles required
+    SIGINT doesn't seem to kill editors
+    SIGINT on interactive terminal shouldn't kill it, ctrl d should
+    count doesn't seem to be working
+    good and bad that don't form a valid range is an interesting case I should handle, 594d6..215acd
+    I want to set execution parameters from the terminal
+    allow update to run at the same time as bisect/repro
+    stuck on >bisect? 
+
 
   3 Clean up
   - _parse_flexible_args sucks
@@ -114,9 +129,11 @@ you should attempt to reproduce the bug. Then, either hit the MARK_GOOD or MARK_
   - src/git.py:192:    print("[TODO] Fetch output length:", len(fetch_output))
   - src/git.py:298:# TODO the refs should be optional, empty string sentinels are ugly here
   - src/project_manager.py:233:        # TODO should this have a default
+  - bisect # TODO check status and below
+  TODOs
 
 Testing
-
+4700 mid
 15 Finishing touches
 - 1 Finalize requirements.txt
     - Windows
@@ -128,7 +145,7 @@ Testing
 - 1 revisit command names
 - 1 trailing whitespace
 - 1 update includes
-- 1 review gitignore
+- 1 mypy
 
 Documentation
 - Write README.md

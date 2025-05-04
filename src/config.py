@@ -3,7 +3,9 @@ import os
 import re
 import shlex
 import sys
+
 from enum import Enum
+from typing import Optional
 
 _CONFIG_PATH = "config.ini"
 _DEFAULT_LINUX_CONFIG_PATH = "default_linux_config.ini"
@@ -19,8 +21,8 @@ class PrintMode(Enum):
 
 
 class Configuration:
-    WORKSPACE_PATH = "./workspace"
-    FORCE = True
+    WORKSPACE_PATH: str = "./workspace"
+    FORCE: bool = True
 
     @staticmethod
     def load_from(filepath: str = ""):
@@ -115,3 +117,7 @@ class Configuration:
             "Execution", "default_execution_parameters")
         Configuration.BACKUP_EXECUTABLE_REGEX = re.compile(config.get(
             "Execution", "backup_executable_regex"))
+        Configuration.AUTOPURGE_DUPLICATES = config.getboolean(
+            "Execution", "autopurge_duplicates")
+        Configuration.AUTOPURGE_LIMIT = config.getint(
+            "Execution", "autopurge_limit")

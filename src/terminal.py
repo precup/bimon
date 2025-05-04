@@ -197,7 +197,7 @@ def _execute_in_subwindow_pty(
         except EOFError:
             break
         
-        window_lines = []
+        window_lines: list[tuple[list[str], str]] = []
         last_non_blank = -1
         while last_non_blank >= -len(output_lines) and output_lines[last_non_blank].strip() == "":
             last_non_blank -= 1
@@ -276,6 +276,7 @@ def execute_in_subwindow(
         if Configuration.PRINT_MODE != PrintMode.VERBOSE:
             print(f"Internal error: unknown print mode {Configuration.PRINT_MODE}."
                   + " Falling back to VERBOSE.")
+        # TODO mypy yellin about this
         stdout = sys.stdout
         stderr = sys.stderr
 
@@ -308,7 +309,7 @@ def split_to_display_lines(text: str, columns: int) -> list[tuple[list[str], str
     matches = [(m.start(), m.end()) for m in re_matches]
     match_i = 0
     lines = []
-    ansi_stack = []
+    ansi_stack: list[str] = []
 
     current_line = ""
     current_line_length = 0
@@ -433,17 +434,17 @@ def histogram_height(fractions: list[float]) -> str:
     return color_bg(output, Configuration.PROGRESS_BACKGROUND_COLOR)
 
 
-def _blend_colors(color1: str, color2: str, fraction: float) -> str:
-    if "38;2" in color1 and "38;2" in color2:
-        color1 = color1.split(";")
-        color2 = color2.split(";")
+def _blend_colors(color_low: str, color_high: str, fraction: float) -> str:
+    if "38;2" in color_low and "38;2" in color_high:
+        color1 = color_low.split(";")
+        color2 = color_high.split(";")
         r1, g1, b1 = int(color1[2]), int(color1[3]), int(color1[4])
         r2, g2, b2 = int(color2[2]), int(color2[3]), int(color2[4])
         r = int(r1 + (r2 - r1) * fraction)
         g = int(g1 + (g2 - g1) * fraction)
         b = int(b1 + (b2 - b1) * fraction)
         return f"38;2;{r};{g};{b}"
-    return color1
+    return color_low
 
 
 def histogram_color(fractions: list[float]) -> str:

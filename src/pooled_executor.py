@@ -5,15 +5,13 @@ from typing import Callable
 
 class PooledExecutor:
     def __init__(self, pool_size: int, task_fn: Callable) -> None:
-        self.pool_size = pool_size
         self.executor = ThreadPoolExecutor(max_workers=pool_size)
         self.submitted_tasks: dict[str, Future] = {}
-        self.running_tasks: set[str] = {}
         self.lock = Lock()
         self.task_fn = task_fn
 
 
-    def enqueue_tasks(self, tasks: list[list[str, list]]) -> None:
+    def enqueue_tasks(self, tasks: list[tuple[str, tuple[str]]]) -> None:
         with self.lock:
             new_keys = {key for key, _ in tasks}
 
@@ -25,7 +23,7 @@ class PooledExecutor:
 
             for key, args in tasks:
                 if key not in self.submitted_tasks:
-                    future = self.executor.submit(self._run_task, key, args)
+                    future = self.executor.submit(self._run_task, key, list(args))
                     self.submitted_tasks[key] = future
 
 

@@ -3,6 +3,7 @@ import shutil
 import string
 import tarfile
 from pathlib import Path
+from typing import Optional
 
 from pyzstd import CParameter, DParameter, ZstdFile
 
@@ -147,19 +148,26 @@ def _extract_version(version: str, target: str) -> bool:
     return True
 
 
-def purge_duplicate_files(protected_versions: set[str] = set(), dry_run: bool = False) -> int:
+def purge_duplicate_files(
+        protected_versions: set[str] = set(), 
+        dry_run: bool = False,
+        keep_count: int = 0) -> int:
     purge_count = 0
     bundle_map = _read_bundle_map()
-    for version in os.listdir(_VERSIONS_DIR):
-        if version in bundle_map and version not in protected_versions:
-            version_path = os.path.join(_VERSIONS_DIR, version)
-            if dry_run:
-                print(f"Would remove {version_path}")
-                purge_count += get_recursive_file_count(version_path)
-            else:
-                if Configuration.PRINT_MODE == Configuration.PrintMode.VERBOSE:
-                    print(f"Removing {version_path}")
-                purge_count += rm(version_path)
+    versions_to_purge = {
+        version for version in os.listdir(_VERSIONS_DIR) if version in bundle_map
+    } - protected_versions
+    versions_to_purge -= set(get_mru(versions_to_purge, keep_count))
+
+    for version in versions_to_purge:
+        version_path = os.path.join(_VERSIONS_DIR, version)
+        if dry_run:
+            print(f"Would remove {version_path}")
+            purge_count += get_recursive_file_count(version_path)
+        else:
+            if Configuration.PRINT_MODE == Configuration.PrintMode.VERBOSE:
+                print(f"Removing {version_path}")
+            purge_count += rm(version_path)
     return purge_count
 
 
@@ -172,7 +180,19 @@ def _compress_with_zstd(folders: list[str], output_path: str) -> bool:
 
 
 def _compress_with_zstd_by_name(paths: dict[str, str], output_path: str) -> bool:
-    rm(output_path)
+    if os.path.exists(output_path):
+        # Check if the file is already in the bundle map.
+        # That should never occur, but it might've once.
+        # Defending just in case since it's very bad to allow.
+        bundle_map = _read_bundle_map()
+        output_filename = os.path.basename(output_path)
+        if output_filename in bundle_map.values():
+            print(f"Recoverable internal error, please report:")
+            print(f"Archive {output_filename} has already been added. This should never occur. Skipping.")
+            return False
+        else:
+            print(f"Archive {output_filename} already exists, but seems invalid. Overwriting.")
+            rm(output_path)
     try:
         with ZstdTarFile(output_path, mode="w") as tar:
             for input_path, arcname in paths.items():
@@ -188,7 +208,7 @@ def _extract_with_zstd(bundle_path: str, file_prefix: str, output_dir: str) -> b
         print(f"Archive {bundle_path} does not exist.")
         return False
     extracted = []
-    def path_filter(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo:
+    def path_filter(member: tarfile.TarInfo, path: str) -> Optional[tarfile.TarInfo]:
         if member.name.startswith(file_prefix):
             extracted.append(member.name)
             return tarfile.data_filter(member, path)
@@ -213,10 +233,22 @@ def compress_bundle(bundle_id: str, bundle: list[str]) -> bool:
 
     version_paths = [os.path.join(_VERSIONS_DIR, version) for version in bundle]
     try:
-        _compress_with_zstd(version_paths, bundle_path)
+        if not _compress_with_zstd(version_paths, bundle_path):
+            return False
     except Exception as e:
         print(f"Compressing bundle {bundle_id} failed with error: {e}")
         print(bundle_path, version_paths)
+        return False
+
+    if not os.path.exists(bundle_path):
+        # This is a band aid for a bug that occurred a single time that I can't reproduce.
+        # Two bundles were reported successfully created and then one compile occurred.
+        # After the compile, the first of the two bundles was not found in storage.
+        # I don't know whether it was never created or if it was deleted, but suspect never created.
+        # I found one issue that might've fixed it but one thing doesn't match properly.
+        # This will prevent it from deleting versions if it happens again, at least.
+        print(f"Recoverable internal error, please report: Bundle {bundle_id} was not created.")
+        print("Version paths:", version_paths)
         return False
 
     bundle_map = _read_bundle_map()
@@ -241,10 +273,10 @@ def get_ignored_commits() -> set[str]:
     if not os.path.exists(_IGNORE_FILE):
         return set()
     with open(_IGNORE_FILE, "r") as f:
-        result = set()
+        result: set[str] = set()
         for line in f.readlines():
             if len(line.strip()) > 0:
-                result += set(line.strip().split())
+                result |= set(line.strip().split())
         return result
 
 
@@ -259,9 +291,9 @@ def get_compiler_error_commits() -> set[str]:
         return result
 
 
-def add_compiler_error_commits(commits: list[str]) -> None:
+def add_compiler_error_commits(commits: set[str]) -> None:
     old_errors = get_compiler_error_commits()
-    new_errors = set(commits) - old_errors
+    new_errors = commits - old_errors
     with open(_COMPILE_ERROR_FILE, "a") as f:
         for commit in new_errors:
             f.write(f"{commit}\n")
@@ -313,7 +345,7 @@ def purge_loose_files(dry_run: bool = False) -> int:
         path = os.path.join(_VERSIONS_DIR, file)
         if dry_run:
             print(f"Would remove {path}")
-            purged += storage.get_recursive_file_count(path)
+            purged += get_recursive_file_count(path)
         else:
             if Configuration.PRINT_MODE == Configuration.PrintMode.VERBOSE:
                 print(f"Removing {path}")
@@ -323,3 +355,17 @@ def purge_loose_files(dry_run: bool = False) -> int:
 
 def get_version_folder(version: str) -> str:
     return os.path.join(_VERSIONS_DIR, version)
+
+
+# TODO this is really hacky but I'm tired
+# avoiding a circular import is annoying
+def get_mru(commits: set[str], max_count: int) -> list[str]:
+    mru: list[str] = []
+    used_order = load_state("execution_cache")
+    for commit in used_order.split():
+        if len(mru) >= max_count:
+            break
+        if commit in commits:
+            mru.append(commit)
+    
+    return mru

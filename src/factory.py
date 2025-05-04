@@ -16,7 +16,7 @@ from src.config import Configuration, PrintMode
 _MIN_SUCCESSES = 3
 
 _bundles_packed = 0
-_compress_time = 0
+_compress_time = 0.0
 
 
 def compress(
@@ -114,13 +114,13 @@ def _print_compile_status(
         processed_count: int, 
         job_commits: int, 
         times: dict[str, float], 
-        error_commits: list[str], 
+        error_commits: set[str], 
         current_commit: str) -> None:
     cols = terminal.get_cols()
     title = terminal.color_key(f" Compiling #{processed_count + 1} of {job_commits} ")
     print(terminal.box_top(title=title))
     
-    average_time = 0
+    average_time = 0.0
     if len(times) > 0:
         average_time = sum(times.values()) / len(times)
         average_time += _compress_time / max(1, _bundles_packed) / Configuration.BUNDLE_SIZE
@@ -182,15 +182,15 @@ def _build_tag_line(tag_times: dict[str, int], bucket_times: list[int]) -> str:
         for tag, tag_time in tag_times.items()
         if tag_time != -1
     }
-    tag_buckets = {
+    tag_first_buckets = {
         tag: i[0]
         for tag, i in tag_buckets.items()
         if len(i) > 0
     }
-    tag_sorted = list(sorted(tag_buckets.keys()))
-    bucket_tags = [None] * len(bucket_times)
+    tag_sorted = list(sorted(tag_first_buckets.keys()))
+    bucket_tags: list[Optional[int]] = [None] * len(bucket_times)
     for tag in tag_sorted[::-1]:
-        bucket_tags[tag_buckets[tag]] = tag
+        bucket_tags[tag_first_buckets[tag]] = tag
     tag_output = ""
     tag_output_len = 0
     for i, tag in enumerate(bucket_tags):
@@ -276,10 +276,10 @@ def compile(
     full_commit_list = git.get_commit_list(Configuration.RANGE_START, Configuration.RANGE_END)
     tags = git.get_tags()
 
-    times = {}
-    compiled_versions = []
+    times: dict[str, float] = {}
+    compiled_versions: list[str] = []
     processable_commits = set(commits) - present_versions
-    error_commits = set()
+    error_commits: set[str] = set()
     while len(error_commits) + len(compiled_versions) < total_versions:
         i = len(error_commits) + len(compiled_versions)
         if i > len(direct_compile):
@@ -314,7 +314,7 @@ def compile(
                 print("Adding to the compile_error_commit file so it's skipped in the future.")
                 print("If you fix its build, you should remove it from the file"
                     + " or run with --ignore-old-errors.")
-                storage.add_compiler_error_commits([commit])
+                storage.add_compiler_error_commits({commit})
             print(f"Error while compiling commit {commit}. Skipping.")
             error_commits.add(commit)
             continue

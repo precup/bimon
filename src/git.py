@@ -15,8 +15,8 @@ _PRECACHE_NAME = "git_precache"
 
 _commit_time_cache = {}
 _neighbor_cache = {}
-_diff_cache = {}
-_diff_precache = {}
+_diff_cache: dict[str, dict[str, int]] = {}
+_diff_precache: dict[str, dict[str, int]]  = {}
 _already_fetched = False
 _cache_loaded = True
 _diffs_added = 0
@@ -108,7 +108,7 @@ def _update_neighbors(commits: Optional[set[str]] = None) -> None:
 
 
 def _get_neighbors(commit: str) -> set[str]:
-    _update_neighbors([commit])
+    _update_neighbors({commit})
     return _neighbor_cache[commit]
 
 
@@ -133,9 +133,9 @@ def get_similar_commit(target_commit: str, possible_commits: set[str]) -> str:
         return ""
     if len(possible_commits) == 1:
         return list(possible_commits)[0]
-    queue = []
+    queue: list[tuple[int, str]] = []
     heapq.heappush(queue, (0, target_commit))
-    best_per = {}
+    best_per: dict[str, int] = {}
     best = ""
     best_diff = -1
     while queue:
@@ -206,8 +206,8 @@ def get_last_fetch_time() -> int:
 def get_git_output(args: list[str], include_err: bool = False) -> str:
     try:
         command = ["git", "-C", Configuration.WORKSPACE_PATH] + args
-        output = subprocess.check_output(command, stderr=subprocess.STDOUT)
-        output = output.decode("utf-8").strip()
+        output_bytes = subprocess.check_output(command, stderr=subprocess.STDOUT)
+        output = output_bytes.decode("utf-8").strip()
         if len(output) > 0 and output[0] == '"' and output[-1] == '"':
             output = output[1:-1]
         return output
@@ -218,14 +218,14 @@ def get_git_output(args: list[str], include_err: bool = False) -> str:
 def get_bounded_commits(
         ancestors: set[str], 
         descendants: set[str], 
-        path_spec: str = "", 
+        path_spec: Optional[str] = None, 
         before: int = -1) -> set[str]:
     command = ["rev-list"]
 
     if before >= 0:
         command += [f"--before={before}"]
 
-    if len(decendants) == 0:
+    if len(descendants) == 0:
         command += ["--all"]
     else:
         command += [f"{descendant}" for descendant in descendants]
@@ -233,7 +233,7 @@ def get_bounded_commits(
     if len(ancestors) > 0:
         command += ["--not"] + [f"{ancestor}^" for ancestor in ancestors]
     
-    if path_spec != "":
+    if path_spec is not None and path_spec != "":
         command += ["--"] + shlex.split(path_spec)
     
     return set(get_git_output(command).split())
@@ -285,21 +285,32 @@ def get_short_log(ref: str) -> str:
     return get_short_name(ref) + " " + commit_message
 
 
-@functools.lru_cache(maxsize=None)
-def resolve_ref(ref: str, fetch_if_missing: bool = False) -> str:
-    commit = get_git_output(["rev-parse", "--revs-only", ref.strip()])
+def resolve_ref(ref: str, fetch_if_missing: bool = False, use_cache: bool = True) -> str:
+    if use_cache and ref != "HEAD" and "pull" not in ref:
+        commit = _resolve_ref_cached(ref)
+    else:
+        commit = _resolve_ref_uncached(ref)
     if fetch_if_missing and len(commit) == 0 and not _already_fetched:
         print(f"Resolving \"{ref}\" failed, fetching in case it's too recent...")
         fetch()
-        return resolve_ref(ref, False)
+        return resolve_ref(ref, False, use_cache)
     return commit
+
+
+def _resolve_ref_uncached(ref: str) -> str:
+    return get_git_output(["rev-parse", "--revs-only", ref.strip()])
+
+
+@functools.lru_cache(maxsize=None)
+def _resolve_ref_cached(ref: str) -> str:
+    return _resolve_ref_uncached(ref)
 
 
 # TODO the refs should be optional, empty string sentinels are ugly here
 def get_commit_list(
         start_ref: str, 
         end_ref: str, 
-        path_spec: str = "", 
+        path_spec: Optional[str] = None, 
         before: int = -1
         ) -> list[str]:
     return list(_get_commit_list(start_ref, end_ref, path_spec, before))
@@ -309,7 +320,7 @@ def get_commit_list(
 def _get_commit_list(
         start_ref: str, 
         end_ref: str, 
-        path_spec: str = "", 
+        path_spec: Optional[str] = None, 
         before: int = -1) -> list[str]:
     command = ["rev-list", "--reverse"]
     if before >= 0:
@@ -320,7 +331,7 @@ def _get_commit_list(
             command += [f"^{start_ref}"]
     else:
         command += [(f"{start_ref}.." if start_ref != "" else "") + end_ref]
-    if path_spec != "":
+    if path_spec is not None and path_spec != "":
         command += ["--"] + shlex.split(path_spec)
     output = get_git_output(command)
     commit_list = [k for k in output.split() if k != ""]
@@ -333,16 +344,19 @@ def _get_commit_list(
 def get_bisect_commits(
         good_refs: set[str], 
         bad_refs: set[str], 
-        path_spec: str = "", 
+        path_spec: Optional[str] = None, 
         before: int = -1) -> list[str]:
+    if len(good_refs) == 0 or len(bad_refs) == 0:
+        return list(get_bounded_commits(good_refs, bad_refs, path_spec, before))
+    print("Bisecting between", good_refs, bad_refs)
     command = (
         ["rev-list", "--bisect-all"] 
-        + [f"^{commit}" for commit in good_refs] 
         + list(bad_refs)
+        + ["--not"] + [f"{commit}^" for commit in good_refs]
     )
     if before >= 0:
         command += [f"--before={before}"]
-    if path_spec != "":
+    if path_spec is not None and path_spec != "":
         command += ["--"] + shlex.split(path_spec)
     output = get_git_output(command)
     return [line.strip().split()[0] for line in output.splitlines() if len(line.strip()) > 0]
@@ -412,7 +426,7 @@ def minimal_parents(parents: set[str]) -> set[str]:
     return set(
         commit for commit in parents 
         if all(
-            not git.is_ancestor(test_commit, commit) 
+            not is_ancestor(test_commit, commit) 
             for test_commit in parents if commit != test_commit
         )
     )
@@ -422,7 +436,7 @@ def minimal_children(children: set[str]) -> set[str]:
     return set(
         commit for commit in children
         if all(
-            not git.is_ancestor(commit, test_commit) 
+            not is_ancestor(commit, test_commit) 
             for test_commit in children if commit != test_commit
         )
     )

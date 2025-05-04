@@ -1,4 +1,5 @@
 import os
+import re
 import shlex
 from pathlib import Path
 from typing import Optional
@@ -12,18 +13,16 @@ from src.config import Configuration
 _CACHE_NAME = "execution_cache"
 
 
-def delete_cache() -> None:
-    storage.delete_state(_CACHE_NAME)
-
-
-def get_mru(commits: set[str], max_count: int) -> list[str]:
-    mru = []
-    used_order = storage.load_state(_CACHE_NAME)
-    for commit in used_order.split():
-        if commit in commits:
-            mru.append(commit)
-    
-    return mru[:max_count]
+def delete_cache(dry_run: bool = False) -> int:
+    path_exists = os.path.exists(storage.get_state_filename(_CACHE_NAME))
+    if dry_run:
+        if path_exists:
+            print(f"Cache \"{_CACHE_NAME}\" would be deleted.")
+            return 1
+        return 0
+    if Configuration.PRINT_MODE == Configuration.PrintMode.VERBOSE and path_exists:
+        print(f"Deleting cache \"{_CACHE_NAME}\".")
+    return storage.delete_state(_CACHE_NAME)
 
 
 def _mark_used(commit: str) -> None:
@@ -62,7 +61,7 @@ def launch(
         factory.cache()
         present_versions.add(commit)
         
-    if not storage.extract_commit(commit):
+    if not storage.extract_version(commit):
         print(f"Failed to extract commit {git.get_short_name(commit)}.")
         return False
     
@@ -78,10 +77,11 @@ def _find_executable(
     if os.path.exists(likely_location):
         return likely_location
 
+    backup_path_re = re.compile(backup_path_regex)
     for root, _, files in os.walk(base_folder):
         for file in files:
             full_path = os.path.join(root, file)
-            if backup_path_regex.match(full_path):
+            if backup_path_re.match(full_path):
                 return full_path
 
     return None
@@ -91,6 +91,9 @@ def _launch_folder(workspace_path: str, execution_parameters: str, wd: str) -> b
     executable_path = _find_executable(
         workspace_path, Configuration.EXECUTABLE_PATH, Configuration.BACKUP_EXECUTABLE_REGEX
     )
+    if executable_path is None:
+        print(f"Executable not found in {workspace_path}.")
+        return False
     executable_path = str(Path(executable_path).resolve())
 
     return terminal.execute_in_subwindow(

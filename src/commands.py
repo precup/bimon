@@ -102,6 +102,7 @@ def repro_command(
         flexible_args: list[str],
         cached_only: bool=False,
     ) -> None:
+    _handle_autopurge()
     execution_parameters, project, _, commit, _, _ = _parse_flexible_args(
         flexible_args, 
         execution_parameters, 
@@ -141,11 +142,11 @@ def repro_command(
                   + " Continuing anyway.")
 
     success = execution.launch(
-        commit=commit, 
+        ref=commit, 
         execution_parameters=execution_parameters, 
         present_versions=present_versions, 
         discard=discard, 
-        cache_only=False, 
+        cached_only=False, 
         wd=project
     )
     if not success:
@@ -163,6 +164,7 @@ def bisect_command(
         flexible_args: list[str],
         ref_range: Optional[str],
     ) -> None:
+    _handle_autopurge()
     last_fetch_time = git.get_last_fetch_time()
     if last_fetch_time == -1 or last_fetch_time < 7 * 24 * 60 * 60:
         print("Trying to fetch since it's been a while...")
@@ -205,17 +207,26 @@ def bisect_command(
             if command == "":
                 continue
             terminal.add_to_history(command)
-            args = parser.parse_args(shlex.split(command))
-            if args.func(bisector, args) == bisect.Bisector.CommandResult.EXIT:
-                break
+            try:
+                args = parser.parse_args(shlex.split(command))
+                if args.func(bisector, args) == bisect.Bisector.CommandResult.EXIT:
+                    break
+            except AttributeError as e:
+                print("Invalid command or option:", e)
+            except SystemExit as e:
+                # TODO the help message on this is awful formatting wise
+                pass
         except KeyboardInterrupt:
+            print()
+            continue
+        except EOFError:
             break
 
     bisector.print_exit_message()
 
 
 def extract_command(ref: str, folder: Optional[str]) -> None:
-    pull_number = git.get_pull_number(ref)
+    pull_number = project_manager.get_pull_number(ref)
     if pull_number != -1:
         pull_ref = git.get_pull_branch_name(pull_number)
         if git.resolve_ref(pull_ref) != "":
@@ -226,7 +237,9 @@ def extract_command(ref: str, folder: Optional[str]) -> None:
         print(f"Invalid ref: {ref} could not be resolved.")
         sys.exit(1)
     
-    if folder is not None:
+    if folder is None:
+        folder = storage.get_version_folder(version)
+    else:
         folder = storage.resolve_relative_to(folder, _ORIGINAL_WD)
 
     if not storage.extract_version(version, folder):
@@ -243,7 +256,7 @@ def purge_command(
         dry_run: bool = False) -> None:
     purge_count = 0
     if duplicates:
-        purge_count += storage.purge_duplicate_files(dry_run)
+        purge_count += storage.purge_duplicate_files(dry_run=dry_run)
     if projects:
         purge_count += project_manager.purge(projects=True, dry_run=dry_run)
     if temp_files:
@@ -273,9 +286,9 @@ def compile_command(ref_ranges: list[str]) -> None:
     seen = set()
     for who_knows in ref_ranges:
         if ".." in who_knows:
-            commit_list = git.get_commit_list(_get_range_parts(who_knows, allow_empty=True))
+            commit_list = git.get_commit_list(*_get_range_parts(who_knows, allow_empty=True))
         else:
-            pull_number = git.get_pull_number(who_knows)
+            pull_number = project_manager.get_pull_number(who_knows)
             if pull_number != -1:
                 git.check_out_pull(pull_number)
                 pull_ref = git.get_pull_branch_name(pull_number)
@@ -345,6 +358,11 @@ def export_command(project_name: str, export_path: str, title: Optional[str] = N
 ############################################################################3
 
 
+def _handle_autopurge() -> None:
+    if Configuration.AUTOPURGE_DUPLICATES:
+        storage.purge_duplicate_files(keep_count=Configuration.AUTOPURGE_LIMIT)
+
+
 def _get_missing_commits(commit_list: list[str], n: int) -> list[str]:
     not_missing_commits = set(storage.get_present_versions())
     not_missing_commits.update(storage.get_ignored_commits())
@@ -369,14 +387,14 @@ def _exit_if_duplicate(
         typename: str, 
         who_knows: str, 
         reason: str = "") -> None:
-    if reason == "":
-        reason = item_internal
     article = "an" if typename.startswith("i") else "a"
     prefix = f"flexible_args detected {article} {typename} \"{who_knows}\" passed to it"
     if item is not None:
         print(prefix + f", but --{typename} is already set.")
         sys.exit(1)
     elif item_internal is not None and item_internal != -1:
+        if reason == "":
+            reason = item_internal
         print(prefix + f", but another {typename} \"{reason}\" was already autodetected.")
         sys.exit(1)
 
@@ -390,17 +408,17 @@ def _parse_flexible_args(
         ref: Optional[str] = None,
         ref_range: Optional[str] = None,
     ) -> tuple[str, str, int, Optional[str], set[str], set[str]]:
-    if len(project.strip()) == "":
+    if project is not None and len(project.strip()) == "":
         project = None
-    if len(issue.strip()) == "":
+    if issue is not None and len(issue.strip()) == "":
         issue = None
-    if len(ref.strip()) == "":
+    if ref is not None and len(ref.strip()) == "":
         ref = None
-    if len(ref_range.strip()) == "":
+    if ref_range is not None and len(ref_range.strip()) == "":
         ref_range = None
 
-    goods = set()
-    bads = set()
+    goods: set[str] = set()
+    bads: set[str] = set()
     def add_to_goods(good_commit: str) -> None:
         if any(git.is_ancestor(bad_commit, good_commit) for bad_commit in bads):
             print(f"Invalid range: a known bad commit is an ancestor of {good_commit}.")
