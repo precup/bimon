@@ -321,7 +321,8 @@ def create_project(
             if not force:
                 response = input("Would you like to use it? [Y/n]: ").strip().lower()
                 if not response.startswith("n"):
-                    return find_project_file(project_folder)
+                    project_file = find_project_file(project_folder)
+                    return project_file if project_file is not None else ""
             print("Overwriting it with a new one.")
         storage.rm(project_folder)
 
@@ -392,7 +393,16 @@ def get_mrp(issue: int) -> str:
         print(f"Previously used MRP found for issue {issue}.")
         response = input("Would you like to use it? [Y/n]: ").strip().lower()
         if not response.startswith("n"):
-            return find_project_file(folder_name) if os.path.exists(folder_name) else zip_filename
+            if os.path.exists(folder_name):
+                project_file = find_project_file(folder_name)
+                if project_file is not None:
+                    return project_file
+                print("No project file found in the folder.")
+                response = input("Would you like to create a new one? [Y/n]: ")
+                if response.strip().lower().startswith("n"):
+                    return ""
+                return create_project_file(folder_name)
+            return zip_filename
             
     print("Attempting to find projects in the issue.")
     zip_links, body_links_len = get_zip_links_from_issue(issue)

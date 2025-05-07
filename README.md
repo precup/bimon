@@ -102,8 +102,12 @@ you should attempt to reproduce the bug. Then, either hit the MARK_GOOD or MARK_
 3 Clean up
 - Better output, colors, text decorations?
 - progress bar feels a bit cluttered
+- ctrl C terminal left me on the box end line during editor launched
 
 Testing!!!
+
+mypy
+  terminal.py non live mode errors
 
 11 Finishing touches
 - 1 revisit command names

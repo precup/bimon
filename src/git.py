@@ -79,7 +79,7 @@ def delete_cache(dry_run: bool = False) -> int:
 
 
 def save_precache() -> None:
-    _save_cache(_PRECACHE_NAME, _commit_time_cache, _diff_precache, {})
+    _save_cache(_PRECACHE_NAME, _commit_time_cache, _diff_precache, {}, _parent_cache)
 
 
 def _save_cache(
@@ -109,7 +109,10 @@ def update_neighbors(commits: Optional[set[str]] = None) -> None:
     if commits is None:
         print("Updating git cache...")
         should_update = True
-    should_update |= all(commit in _parent_cache and commit in _child_cache for commit in commits)
+    else:
+        should_update = all(
+            commit in _parent_cache and commit in _child_cache for commit in commits
+        )
     if should_update:
         for flag, cache in (("--parents", _parent_cache), ("--children", _child_cache)):
             lines = get_git_output(["rev-list", flag, "--all"]).splitlines()
@@ -203,6 +206,7 @@ def fetch() -> None:
     fetch_command = ["fetch", "--tags", "--prune", "origin"]
     fetch_output = get_git_output(fetch_command, include_err=True)
     if len(fetch_output) > 0:
+        print(fetch_output)
         _cache_clear()
     _already_fetched = True
 
@@ -238,14 +242,14 @@ def get_all_ancestors(ref: str) -> set[str]:
     return _get_all_relative_types(ref, _parent_cache)
 
 
-def _get_all_relative_types(ref: str, cache: dict[str, set[str]]) -> set[str]:
+def _get_all_relative_types(ref: str, relative_cache: dict[str, set[str]]) -> set[str]:
     commit = resolve_ref(ref)
     seen = {commit}
     queue = deque([commit])
     while queue:
         curr = queue.popleft()    
         update_neighbors({curr})
-        for parent in cache(curr):
+        for parent in relative_cache[curr]:
             if parent not in seen:
                 seen.add(curr)
                 queue.append(parent)
@@ -380,7 +384,7 @@ def get_bounded_commits(
         for commit in commits:
             all_commits -= get_fn(commit)
         if not exclusive:
-            all_commits += commits
+            all_commits |= commits
         
     return [commit for commit in ordered_commits if commit in all_commits]
 
@@ -389,7 +393,7 @@ def _get_interesting_counts(
         interesting: set[str], 
         forward_sets: dict[str, set[str]], 
         backward_sets: dict[str, set[str]],
-        boundary_commits: set[str]) -> tuple[dict[str, int], Optional[dict[str, int]]]:
+        boundary_commits: set[str]) -> tuple[dict[str, int], dict[str, int]]:
     interesting_counts: dict[str, int] = {}
     culled_counts: dict[str, int] = {}
     unculled_counts: dict[str, int] = {}
@@ -414,8 +418,7 @@ def _get_interesting_counts(
             unculled_counts[curr] += 1
 
         for neighbor in forward_sets[curr]:
-            backwards = backward_sets[neighbor]
-            if all(backward in interesting_counts[neighbor] for backward in backwards):
+            if all(backward in interesting_counts for backward in backward_sets[neighbor]):
                 queue.append(neighbor)
 
     return interesting_counts, culled_counts
@@ -457,9 +460,12 @@ def get_bisect_commits_with_compile_counts(
         good_refs, bad_refs, path_spec, before, ancestor_exclusive=True
     )
     if len(bad_refs) == 0:
-        return interesting_commit_list[::-1]
-    elif len(good_refs) == 0:
-        return interesting_commit_list
+        interesting_commit_list = interesting_commit_list[::-1]
+
+    if len(bad_refs) == 0 or len(good_refs) == 0:
+        return [
+            (commit, -1) for commit in interesting_commit_list
+        ]
     
     interesting_commits = set(interesting_commit_list)
     descendant_interesting_counts, descendant_culled_counts = _get_interesting_counts(

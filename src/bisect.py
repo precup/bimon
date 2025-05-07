@@ -525,7 +525,7 @@ class Bisector:
     def _launch(self, single_launch: bool = False) -> CommandResult:
         if self._current_commit is None:
             print("Internal Error: No current commit is set, nothing to run.")
-            return False
+            return Bisector.CommandResult.ERROR
         result = execution.launch_with_automation(
             self._current_commit,
             self._execution_parameters,
@@ -564,7 +564,7 @@ class Bisector:
                 automark_command[1:], 
                 no_launch=single_launch)
         
-        result = Bisector.CommandResult.SUCCESS
+        return Bisector.CommandResult.SUCCESS
 
 
     def _handle_time_warnings(self) -> None:

@@ -147,7 +147,7 @@ def _launch_folder(
     )
     if executable_path is None:
         print(f"Executable not found in {workspace_path}.")
-        return False
+        return "error"
     executable_path = str(Path(executable_path).resolve())
 
     command = [executable_path] + shlex.split(execution_parameters, posix='nt' != os.name)

@@ -166,11 +166,7 @@ def bisect_command(
     last_fetch_time = git.get_last_fetch_time()
     if last_fetch_time == -1 or last_fetch_time < 7 * 24 * 60 * 60:
         print("Trying to fetch since it's been a while...")
-        try: 
-            git.fetch()
-        except git.GitError:
-            print("Failed to fetch. This is probably fine, continuing anyway.")
-            pass
+        git.fetch()
     git.update_neighbors()
 
     execution_parameters, project, issue_number, _, goods, bads = _parse_flexible_args(
@@ -210,7 +206,7 @@ def bisect_command(
                 split_args = shlex.split(command, posix='nt' != os.name)
                 clean_args = parsers.preparse_bisect_command(split_args)
                 has_help = '--help' in split_args or '-h' in split_args
-                if clean_args.lower() == "set-params" and not has_help:
+                if clean_args[0] == "set-params" and not has_help:
                     # Bit of a hack, but we don't want to require this to be escaped
                     # so we bypass argparse
                     execution_parameters = command.strip()
@@ -505,17 +501,17 @@ def _parse_flexible_args(
             who_knows = who_knows[1:]
         if all(c in string.hexdigits for c in who_knows) and len(who_knows) > 7:
             git.resolve_ref(who_knows, fetch_if_missing=True)
-        commit = git.resolve_ref(who_knows)
-        if commit != "":
+        who_knows_commit = git.resolve_ref(who_knows)
+        if who_knows_commit != "":
             if single_ref_mode:
                 _exit_if_duplicate(ref, ref_flexible, "ref", who_knows)
                 ref_flexible = who_knows
                 continue
             else:
                 if flipped:
-                    add_to_bads(commit)
+                    add_to_bads(who_knows_commit)
                 else:
-                    add_to_goods(commit)
+                    add_to_goods(who_knows_commit)
                 continue
 
         _exit_if_duplicate(project, project_flexible, "project", who_knows)
@@ -546,12 +542,8 @@ def _parse_flexible_args(
     if project is None or project == "":
         project = project_manager.get_mrp(issue_number)
         if project == "" and "{PROJECT}" in execution_parameters:
-            print("Nothing to do.")
-            sys.exit(0)
-        else:
-            project = project_manager.get_project_path("")
-            if not os.path.exists(project):
-                os.mkdir(project)
+            print("Execution parameters require a project but none was provided.")
+            sys.exit(1)
     elif not project.startswith("http"):
         project_name_path = project_manager.get_project_path(project)
         if project_name_path != "" and os.path.exists(project_name_path):
@@ -569,11 +561,12 @@ def _parse_flexible_args(
 
     if project.endswith(".zip"):
         if project.startswith("http"):
-            if not project_manager.download_zip(project, project_manager.TEMPORARY_ZIP):
+            if not project_manager.download_project(project, str(issue_number)):
                 print("Failed to download zip file.")
                 sys.exit(1)
-            project = project_manager.TEMPORARY_ZIP
-        project = project_manager.extract_mrp(project, issue_number)
+            project = project_manager.get_project_path(str(issue_number))
+        else:
+            project = project_manager.extract_project(project, str(issue_number))
         if project == "":
             sys.exit(1)
     elif project.endswith("project.godot"):

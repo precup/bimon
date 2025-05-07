@@ -304,6 +304,7 @@ def execute_in_subwindow_with_automation(
     if cwd == "":
         cwd = None
     if len(command) > 0:
+        # TODO doesn't account for cwd
         if os.path.exists(command[0]):
             try:
                 exec_bits = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
@@ -346,10 +347,6 @@ def execute_in_subwindow_with_automation(
         stderr = subprocess.STDOUT
         process_output = True
 
-    if len(command) > 0 and not os.path.exists(command[0]):
-        path_locator = shutil.which(command[0])
-        if path_locator is not None:
-            command[0] = path_locator
     process = subprocess.Popen(
         command,
         stdout=stdout,
@@ -376,8 +373,10 @@ def execute_in_subwindow_with_automation(
                 if mark is not None and process.isalive():
                     process.kill(signal.SIGINT)
         finally:
-            process.stdout.close()
-            process.stderr.close()
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
 
     process.wait()
 

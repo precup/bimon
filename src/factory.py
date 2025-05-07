@@ -194,7 +194,7 @@ def _build_tag_line(tags: list[str], bucket_times: list[int]) -> str:
         if len(i) > 0
     }
     tag_sorted = list(sorted(tag_first_buckets.keys()))
-    bucket_tags: list[Optional[int]] = [None] * len(bucket_times)
+    bucket_tags: list[Optional[str]] = [None] * len(bucket_times)
     for tag in tag_sorted[::-1]:
         bucket_tags[tag_first_buckets[tag]] = tag
     tag_output = ""
@@ -392,6 +392,8 @@ def cache() -> bool:
 
     abs_workspace_path = os.path.abspath(Configuration.WORKSPACE_PATH)
     transfers = _get_paths_from_archive_paths()
+    if transfers is None:
+        return False
     
     for transfer_path in transfers:
         relative_path = os.path.relpath(transfer_path, abs_workspace_path)
