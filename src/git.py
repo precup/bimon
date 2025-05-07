@@ -431,9 +431,19 @@ def get_bisect_commits(
         bad_refs: set[str], 
         path_spec: Optional[str] = None, 
         before: int = -1) -> list[str]:
-    return [commit for commit, _ in get_bisect_commits_with_compile_counts(
-        good_refs, bad_refs, path_spec, before=before
-    )]
+    if len(good_refs) == 0 or len(bad_refs) == 0:
+        return list(get_bounded_commits(good_refs, bad_refs, path_spec, before))
+    command = (
+        ["rev-list", "--bisect-all"] 
+        + list(bad_refs)
+        + [f"^{commit}" for commit in good_refs]
+    )
+    if before >= 0:
+        command += [f"--before={before}"]
+    if path_spec is not None and path_spec != "":
+        command += ["--"] + shlex.split(path_spec, posix='nt' != os.name)
+    output = get_git_output(command)
+    return [line.strip().split()[0] for line in output.splitlines() if len(line.strip()) > 0]
 
 
 def get_bisect_steps_from_remaining(remaining: int) -> float:

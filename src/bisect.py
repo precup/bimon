@@ -123,6 +123,8 @@ class Bisector:
 
         self._goods.update(temp_goods)
         self._bads.update(temp_bads)
+        # TODO this is a hack
+        self._bads = temp_bads
         self._skips.update(temp_skips)
 
         return True
@@ -397,20 +399,16 @@ class Bisector:
 
 
     def print_status_message(self, short: bool = True) -> None:
-        bisect_commit_info = git.get_bisect_commits_with_compile_counts(
+        remaining = set(git.get_bisect_commits(
             good_refs=self._goods, 
             bad_refs=self._bads, 
             path_spec=self._path_spec, 
-            boundary_commits=storage.get_present_versions(), 
-            before=self._end_timestamp)
+            before=self._end_timestamp))
         
-        total_compile_count = sum(commit_info[1] for commit_info in bisect_commit_info) 
-        average_compile_count = total_compile_count / len(bisect_commit_info)
-        remaining = {commit_info[0] for commit_info in bisect_commit_info}
         print("There are", len(remaining), "remaining possible commits.")
         if len(self._goods) > 0 and len(self._bads) > 0:
             steps_left = git.get_bisect_steps_from_remaining((len(remaining)))
-            steps_text = f"~{steps_left:01f} steps and ~{average_compile_count:01f} compiles"
+            steps_text = f"~{steps_left:01f} steps "
             print(steps_text + " remaining. Next commit to test:")
         else:
             print("Waiting for initial good and bad commits.")
