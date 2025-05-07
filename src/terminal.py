@@ -22,13 +22,13 @@ else:
     from ptyprocess import PtyProcessUnicode as PtyProcess
 
 DEFAULT_OUTPUT_WIDTH = 80
+MAX_OUTPUT_AUTOMATE_SCAN_LINES = 100
 ANSI_RESET = "\033[0m"
 ANSI_CLEAR_LINE = "\033[2K"
 
 _HISTORY_FILE = storage.get_state_filename("history")
 _UNICODE_BAR_PARTS = " ▏▎▍▌▋▊▉█"
 _C437_BAR_PARTS = " ▌█"
-_HEIGHT_EIGHTHS = " ▁▂▃▄▅▆▇█"
 _UNICODE_HEIGHT_PARTS = " ▁▂▃▄▅▆▇█"
 _C437_HEIGHT_PARTS = " ░▒▓█"
 _ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -99,7 +99,7 @@ def set_command_completer(completer: callable) -> None:
     readline.parse_and_bind("set show-all-if-ambiguous on")
 
 
-# https://stackoverflow.com/questions/36760127/how-to-use-the-new-support-for-ansi-escape-sequences-in-the-windows-10-console
+# https://stackoverflow.com/questions/36760127/
 def _windows_enable_ANSI(std_id):
     """Enable Windows 10 cmd.exe ANSI VT Virtual Terminal Processing."""
     from ctypes import byref, POINTER, windll, WINFUNCTYPE
@@ -159,12 +159,35 @@ def get_cols() -> int:
         return DEFAULT_OUTPUT_WIDTH
 
 
+def _get_mark_from_lines(
+        lines: list[str],
+        automate_good: Optional[str],
+        automate_good_regex: Optional[re.Pattern],
+        automate_bad: Optional[str],
+        automate_bad_regex: Optional[re.Pattern]) -> Optional[str]:
+    text = "\n".join(lines[-MAX_OUTPUT_AUTOMATE_SCAN_LINES:])
+    result = None
+    if ((automate_good is not None and automate_good in text)
+        or (automate_good_regex is not None and automate_good_regex.search(text) is not None)):
+        result = "good"
+    if ((automate_bad is not None and automate_bad in text)
+        or (automate_bad_regex is not None and automate_bad_regex.search(text) is not None)):
+        result = "bad" if result is None else "error"
+    return result
+
+
 def _execute_in_subwindow_pty(
         command: list[str], 
         title: str, 
         rows: int, 
         cwd: Optional[str], 
-        eat_kill: bool) -> bool:
+        eat_kill: bool,
+        automate_good: Optional[str],
+        automate_good_regex: Optional[re.Pattern],
+        automate_bad: Optional[str],
+        automate_bad_regex: Optional[re.Pattern],
+        automate_crash: Optional[str],
+        automate_exit: Optional[str]) -> str:
     process = PtyProcess.spawn(command, cwd=cwd)
     cols = get_cols()
     output_lines = [""]
@@ -175,6 +198,7 @@ def _execute_in_subwindow_pty(
     ansi_codes_seen = set()
     already_soft_killed = False
 
+    mark: Optional[str] = None
     while process.isalive():
         try:
             stdout_chunk = process.read(1024)
@@ -191,6 +215,15 @@ def _execute_in_subwindow_pty(
                         continue
                 output_lines[-1] += lines[0]
                 output_lines += lines[1:]
+                if mark is None:
+                    mark = _get_mark_from_lines(
+                        output_lines,
+                        automate_good,
+                        automate_good_regex,
+                        automate_bad,
+                        automate_bad_regex)
+                    if mark is not None:
+                        process.kill(signal.SIGINT)
             else:
                 time.sleep(0.1)
                 continue
@@ -241,18 +274,33 @@ def _execute_in_subwindow_pty(
     if lines_printed > 0:
         print("\n")
     # print("Ansicodes seen:", ansi_codes_seen)
-    if process.exitstatus != 0:
+
+    if mark is not None:
+        return mark
+    elif process.exitstatus == 0:
+        if automate_exit is not None:
+            return automate_exit
+        return ""
+    else:
+        if automate_crash is not None:
+            return automate_crash
         print("Dumping full process log because an error occurred:")
         print("\n".join(output_lines))
-    return process.exitstatus == 0
+        return "error"
 
 
-def execute_in_subwindow(
-        command: list[str], 
-        title: str, 
-        rows: int, 
-        cwd: Optional[str] = None, 
-        eat_kill: bool = False) -> bool:
+def execute_in_subwindow_with_automation(
+        command: list[str],
+        title: str,
+        rows: int,
+        cwd: Optional[str] = None,
+        eat_kill: bool = False,
+        automate_good: Optional[str] = None,
+        automate_good_regex: Optional[re.Pattern] = None,
+        automate_bad: Optional[str] = None,
+        automate_bad_regex: Optional[re.Pattern] = None,
+        automate_crash: Optional[str] = None,
+        automate_exit: Optional[str] = None) -> str:
     if cwd == "":
         cwd = None
     if len(command) > 0:
@@ -260,7 +308,7 @@ def execute_in_subwindow(
             try:
                 exec_bits = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
                 os.chmod(command[0], os.stat(command[0]).st_mode | exec_bits)
-            except:
+            except Exception:
                 pass
         else:
             path_locator = shutil.which(command[0])
@@ -268,7 +316,19 @@ def execute_in_subwindow(
                 command[0] = path_locator
 
     if Configuration.PRINT_MODE == PrintMode.LIVE:
-        return _execute_in_subwindow_pty(command, title, rows, cwd, eat_kill)
+        return _execute_in_subwindow_pty(
+            command, 
+            title, 
+            rows, 
+            cwd, 
+            eat_kill,
+            automate_good,
+            automate_good_regex,
+            automate_bad,
+            automate_bad_regex,
+            automate_crash,
+            automate_exit)
+    
     elif Configuration.PRINT_MODE == PrintMode.QUIET:
         stdout = subprocess.DEVNULL
         stderr = subprocess.DEVNULL
@@ -276,9 +336,15 @@ def execute_in_subwindow(
         if Configuration.PRINT_MODE != PrintMode.VERBOSE:
             print(f"Internal error: unknown print mode {Configuration.PRINT_MODE}."
                   + " Falling back to VERBOSE.")
-        # TODO mypy yellin about this
         stdout = sys.stdout
         stderr = sys.stderr
+    
+    process_output = False
+    if (automate_good is not None or automate_good_regex is not None or 
+        automate_bad is not None or automate_bad_regex is not None):
+        stdout = subprocess.PIPE
+        stderr = subprocess.STDOUT
+        process_output = True
 
     if len(command) > 0 and not os.path.exists(command[0]):
         path_locator = shutil.which(command[0])
@@ -289,10 +355,56 @@ def execute_in_subwindow(
         stdout=stdout,
         stderr=stderr,
         text=True,
-        cwd=cwd,
-    )
+        cwd=cwd)
+
+    mark: Optional[str] = None
+    if process_output:
+        output = []
+        try:
+            for line in iter(process.stdout.readline, ""):
+                if Configuration.PRINT_MODE != PrintMode.QUIET:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                output.append(line)
+                mark = _get_mark_from_lines(
+                    output,
+                    automate_good,
+                    automate_good_regex,
+                    automate_bad,
+                    automate_bad_regex)
+                
+                if mark is not None and process.isalive():
+                    process.kill(signal.SIGINT)
+        finally:
+            process.stdout.close()
+            process.stderr.close()
+
     process.wait()
-    return process.returncode == 0
+
+    if mark is not None:
+        return mark
+    elif process.returncode == 0:
+        if automate_exit is not None:
+            return automate_exit
+        return ""
+    elif automate_crash is not None:
+        return automate_crash
+    else:
+        return "error"
+
+
+def execute_in_subwindow(
+        command: list[str], 
+        title: str, 
+        rows: int, 
+        cwd: Optional[str] = None, 
+        eat_kill: bool = False) -> bool:
+    return execute_in_subwindow_with_automation(
+        command=command,
+        title=title,
+        rows=rows,
+        cwd=cwd,
+        eat_kill=eat_kill) != "error"
 
 
 def split_to_display_lines(text: str, columns: int) -> list[tuple[list[str], str]]:
@@ -360,7 +472,7 @@ def trim_to_line(text: str, columns: int) -> str:
 
 
 def box_content(text: str, columns: int = 0, bold: bool = True) -> str:
-    box_side = "┃" if bold else "│"
+    box_side = "┃" if bold and Configuration.UNICODE_ENABLED else "│"
     start = box_side + " "
     end = " " + box_side
 
@@ -379,21 +491,21 @@ def box_content(text: str, columns: int = 0, bold: bool = True) -> str:
 
 def box_top(bold: bool = True, title: str = "") -> str:
     chars = "┌─┐"
-    if bold:
+    if bold and Configuration.UNICODE_ENABLED:
         chars = "┏━┓"
     return box_generic(chars, title)
 
 
 def box_middle(bold: bool = True, title: str = "") -> str:
     chars = "├─┤"
-    if bold:
+    if bold and Configuration.UNICODE_ENABLED:
         chars = "┣━┫"
     return box_generic(chars, title)
 
 
 def box_bottom(bold: bool = True, title: str = "") -> str:
     chars = "└─┘"
-    if bold:
+    if bold and Configuration.UNICODE_ENABLED:
         chars = "┗━┛"
     return box_generic(chars, title)
 
@@ -448,10 +560,10 @@ def _blend_colors(color_low: str, color_high: str, fraction: float) -> str:
 
 
 def histogram_color(fractions: list[float]) -> str:
-    output = ""
     colors = Configuration.HEATMAP_COLORS
     if len(colors) < 2:
         colors = ["white" if len(colors) == 0 else colors[0]] * 2
+    output = ""
     use_first = "38;2" in colors[0] and "38;2" in colors[1]
     for fraction in fractions:
         color_index = max(min(1, fraction), 0) * (len(colors) - 1 - (0 if use_first else 1))
@@ -461,8 +573,7 @@ def histogram_color(fractions: list[float]) -> str:
         bucket_color = _blend_colors(
             colors[int(color_index)], 
             colors[blend_index], 
-            color_index % 1
-        )
+            color_index % 1)
         output += color(_C437_HEIGHT_PARTS[-1], bucket_color)
     return output
 
@@ -490,7 +601,7 @@ def color_bg(text: str, color_str: str) -> str:
     if len(color_str) > 1 and color_str[-1].isdigit():
         pass # ANSI code, pass directly in
     elif color_str in _ANSI_BG_COLOR_MAP:
-        color = _ANSI_BG_COLOR_MAP[color_str]
+        color_str = _ANSI_BG_COLOR_MAP[color_str]
     else:
         print(f"Recoverable internal error: unknown color {color_str} requested.")
         return text

@@ -2,7 +2,6 @@ import os
 import shutil
 import string
 import tarfile
-from pathlib import Path
 from typing import Optional
 
 from pyzstd import CParameter, DParameter, ZstdFile
@@ -101,7 +100,8 @@ def _read_bundle_map() -> dict[str, str]:
 
 def get_present_versions() -> set[str]:
     return (
-        {version for version in os.listdir(_VERSIONS_DIR) if git.resolve_ref(version) == version}
+        {version for version in os.listdir(_VERSIONS_DIR) 
+        if git.resolve_ref(version) == version}
         | set(_read_bundle_map().keys())
     )
 
@@ -148,27 +148,27 @@ def _extract_version(version: str, target: str) -> bool:
     return True
 
 
-def purge_duplicate_files(
+def clean_duplicate_files(
         protected_versions: set[str] = set(), 
         dry_run: bool = False,
         keep_count: int = 0) -> int:
-    purge_count = 0
+    clean_count = 0
     bundle_map = _read_bundle_map()
-    versions_to_purge = {
+    versions_to_clean = {
         version for version in os.listdir(_VERSIONS_DIR) if version in bundle_map
     } - protected_versions
-    versions_to_purge -= set(get_mru(versions_to_purge, keep_count))
+    versions_to_clean -= set(get_mru(versions_to_clean, keep_count))
 
-    for version in versions_to_purge:
+    for version in versions_to_clean:
         version_path = os.path.join(_VERSIONS_DIR, version)
         if dry_run:
             print(f"Would remove {version_path}")
-            purge_count += get_recursive_file_count(version_path)
+            clean_count += get_recursive_file_count(version_path)
         else:
             if Configuration.PRINT_MODE == Configuration.PrintMode.VERBOSE:
                 print(f"Removing {version_path}")
-            purge_count += rm(version_path)
-    return purge_count
+            clean_count += rm(version_path)
+    return clean_count
 
 
 def _compress_with_zstd(folders: list[str], output_path: str) -> bool:
@@ -187,8 +187,9 @@ def _compress_with_zstd_by_name(paths: dict[str, str], output_path: str) -> bool
         bundle_map = _read_bundle_map()
         output_filename = os.path.basename(output_path)
         if output_filename in bundle_map.values():
-            print(f"Recoverable internal error, please report:")
-            print(f"Archive {output_filename} has already been added. This should never occur. Skipping.")
+            print("Recoverable internal error, please report:")
+            print(f"Archive {output_filename} has already been added.")
+            print("This should never occur. Skipping.")
             return False
         else:
             print(f"Archive {output_filename} already exists, but seems invalid. Overwriting.")
@@ -244,7 +245,7 @@ def compress_bundle(bundle_id: str, bundle: list[str]) -> bool:
         # This is a band aid for a bug that occurred a single time that I can't reproduce.
         # Two bundles were reported successfully created and then one compile occurred.
         # After the compile, the first of the two bundles was not found in storage.
-        # I don't know whether it was never created or if it was deleted, but suspect never created.
+        # I don't know whether it was never created or if it was deleted.
         # I found one issue that might've fixed it but one thing doesn't match properly.
         # This will prevent it from deleting versions if it happens again, at least.
         print(f"Recoverable internal error, please report: Bundle {bundle_id} was not created.")
@@ -333,24 +334,24 @@ def get_state_filename(state_name: str) -> str:
     return os.path.join(_STATE_DIR, state_name)
 
 
-def purge_loose_files(dry_run: bool = False) -> int:
+def clean_loose_files(dry_run: bool = False) -> int:
     loose_files = set(os.listdir(_VERSIONS_DIR))
     loose_files -= set(_read_bundle_map().values())
     loose_files = {
         file for file in loose_files 
         if len(file) != 40 or not all(c in string.hexdigits for c in file)
     }
-    purged = 0
+    cleaned = 0
     for file in loose_files:
         path = os.path.join(_VERSIONS_DIR, file)
         if dry_run:
             print(f"Would remove {path}")
-            purged += get_recursive_file_count(path)
+            cleaned += get_recursive_file_count(path)
         else:
             if Configuration.PRINT_MODE == Configuration.PrintMode.VERBOSE:
                 print(f"Removing {path}")
-            purged += rm(path)
-    return purged
+            cleaned += rm(path)
+    return cleaned
 
 
 def get_version_folder(version: str) -> str:

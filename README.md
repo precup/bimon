@@ -35,7 +35,7 @@ If you've got a fancy `git bisect run` based workflow, you can have it retrieve 
 - Space. It'll take about 13 GB per 1k commits in the range you want to cover. 4.0 to 4.4 is about 260 GB.
 - This was made for Linux. If you want it on other platforms, PRs are welcome.
 - A reasonably recent version of git on your PATH
-- Python 3.9+ (maybe higher, I'm on 3.12, but I'm definitely using 3.9 features)
+- Python 3.12+
 
 ### Setup
 1) Check out a new copy of the `godotengine/godot` repo in a location outside the BiMon folder since they have separate git setups. This will be called your workspace folder. Using a dedicated clone of godot instead of reusing the one you do dev work on is strongly recommended.
@@ -61,7 +61,7 @@ Porcelain commands:
 - `update [-f/--force] [-n N] [CUT_REV]` - Fetch, compile, and cache missing commits, working back from `CUT_REV` until it hits config.py's `START_REV`. `CUT_REV` defaults to the latest commit. If `-f` is provided, uncommitted changes in the workspace directory will be discarded instead of preventing the update. If `-n` is provided, only 1 in every `N` commits will be compiled and cached.
 - `bisect [-d/--discard] [-c/--cached-only] [PROJECT]` - Bisect history to find a regression's commit. Enters an interactive mode detailed below. `PROJECT` may be the root folder of the project or the path of a `project.godot` file. If no project is provided, the Project Manager will be launched.
 - `extract REV [FILE_PATH]` - Extracts the binary for the commit for the provided revision name `REV` to `FILE_PATH`. If `FILE_PATH` is not provided, the commit SHA is used instead. Exits 2 if that commit isn't present in the cache.
-- `purge` - Delete any uncompressed binaries that are also present in compressed form. These may have been littered around if BiMon encounters an error or is forced to close while working, or the `extract` command is used.
+- `clean` - Delete any uncompressed binaries that are also present in compressed form. These may have been littered around if BiMon encounters an error or is forced to close while working, or the `extract` command is used.
 - `help` - Show this info.
 
 Plumbing commands (usually handled by `update`):
@@ -99,65 +99,59 @@ you should attempt to reproduce the bug. Then, either hit the MARK_GOOD or MARK_
 
 ### TODO
 
-8 - TODO
-  - How do I pass a name and a project to repro and bisect cleanly?
-  - allow running scripts
-        script command
-        accepts a path, which is run repeatedly
-        the script itself is passed in as args:
-         - the commit sha
-         - the executable path for that commit
-         - the arguments passed to the script command after the path
-    instead of using a script, if you could just run a python snippet on the output maybe that's good enough?
-    bisect crashes on bad command
-    command prefixes aren't valid
-    ambiguous revs are still broken (594d6)
-    how many compiles required
-    SIGINT doesn't seem to kill editors
-    SIGINT on interactive terminal shouldn't kill it, ctrl d should
-    count doesn't seem to be working
-    good and bad that don't form a valid range is an interesting case I should handle, 594d6..215acd
-    I want to set execution parameters from the terminal
-    allow update to run at the same time as bisect/repro
-    stuck on >bisect? 
+3 Clean up
+- Better output, colors, text decorations?
+- progress bar feels a bit cluttered
 
+Testing!!!
 
-  3 Clean up
-  - _parse_flexible_args sucks
-  - Better output, colors, text decorations?
-  - progress bar feels a bit cluttered
-  - src/git.py:192:    print("[TODO] Fetch output length:", len(fetch_output))
-  - src/git.py:298:# TODO the refs should be optional, empty string sentinels are ugly here
-  - src/project_manager.py:233:        # TODO should this have a default
-  - bisect # TODO check status and below
-  TODOs
-
-Testing
-4700 mid
-15 Finishing touches
-- 1 Finalize requirements.txt
-    - Windows
-        Needed to manually install pyreadline3, pywinpty
-- 1 make precache file
-- 8 Code function level clean up pass
-- 1 Run a linter
-- 1 update bisect command completer
+11 Finishing touches
 - 1 revisit command names
-- 1 trailing whitespace
-- 1 update includes
-- 1 mypy
+    set-params
+    repro
+- 1 revisit single character arg support and defaults
+- 1 src/commands.py:234:                # TODO the help message on this is awful formatting wise
 
-Documentation
+- 8 Code function level clean up pass - 969 + 573 + 545 = 2087 
+    git - 280
+        I hate the cache functions
+        why are there no newlines anywhere
+        line 280 upwards
+    bisect - 689
+        like the whole file
+
+    config - 129
+        think about config names
+    parsers - 444
+        extract common argument descriptions
+
+    terminal - 220
+        execute_in_subwindow_with_automation
+        _execute_in_subwindow_pty
+    project_manager - 45
+        set_project_title
+    commands - 280
+        _parse_flexible_args is digusting
+        update_command
+        repro_command commit handling
+
+2 Last things
+- 1 make precache file
+- 1 trailing whitespace
+
+7 Documentation
 - Write README.md
-    Add note about fetching
 - defaults don't show up properly in help
 - Update argparser help strings
 - Add descriptions/epilogs/usage strings
 - Update config files
 - Ordering in help
-- Single character arg support
+
+nits
+    circular import TODO
 
 Known Issues
+- Multiple instances running at once may cause problems
 - `scons` is sometimes faster after a clean, not sure why. Clean automatically?
 - Corrupted binaries aren't handled at all
     - Does killing the extraction threads litter the version space?
@@ -171,5 +165,5 @@ Maybe Someday
 - Fullscreen update mode
 - Terminal window resizing support
 - Find commits mentioned in the issue
-- More accurate estimate of remaining steps
 - Lifetime stats :D
+- Empty string usage cleanup/cleanup pass

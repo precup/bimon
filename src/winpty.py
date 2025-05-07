@@ -31,8 +31,8 @@ import socket
 import threading
 import time
 
-from winpty.winpty import PTY
 from winpty import PtyProcess as PtyProcessSource
+from winpty.winpty import PTY
 
 
 class PtyProcess(PtyProcessSource):
@@ -79,5 +79,5 @@ def _read_in_thread(address, pty):
                     time.sleep(0.1)
                 else:
                     client.send(bytes(data, 'utf-8'))
-            except Exception as e:
+            except Exception:
                 break

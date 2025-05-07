@@ -5,7 +5,6 @@ import shlex
 import sys
 
 from enum import Enum
-from typing import Optional
 
 _CONFIG_PATH = "config.ini"
 _DEFAULT_LINUX_CONFIG_PATH = "default_linux_config.ini"
@@ -25,24 +24,31 @@ class Configuration:
     FORCE: bool = True
 
     @staticmethod
+    def _get_configuration_path() -> str:
+        default_config_path = _DEFAULT_LINUX_CONFIG_PATH
+        if os.name == "nt":
+            default_config_path = _DEFAULT_WINDOWS_CONFIG_PATH
+        elif sys.platform.lower() == "darwin":
+            default_config_path = _DEFAULT_MACOS_CONFIG_PATH
+
+        if os.path.exists(_CONFIG_PATH):
+            filepath = _CONFIG_PATH
+        elif os.path.exists(default_config_path):
+            print(f"config.ini not found. Falling back to {default_config_path}.")
+            filepath = default_config_path
+        else:
+            print(f"Neither config.ini nor {default_config_path} found"
+                + " and no --config provided. Exiting.")
+            return ""
+        return filepath
+
+    @staticmethod
     def load_from(filepath: str = ""):
         config = configparser.ConfigParser()
 
         if filepath == "":
-            default_config_path = _DEFAULT_LINUX_CONFIG_PATH
-            if os.name == "nt":
-                default_config_path = _DEFAULT_WINDOWS_CONFIG_PATH
-            elif sys.platform.lower() == "darwin":
-                default_config_path = _DEFAULT_MACOS_CONFIG_PATH
-
-            if os.path.exists(_CONFIG_PATH):
-                filepath = _CONFIG_PATH
-            elif os.path.exists(default_config_path):
-                print(f"config.ini not found. Falling back to {default_config_path}.")
-                filepath = default_config_path
-            else:
-                print(f"Neither config.ini nor {default_config_path} found"
-                    + " and no --config provided. Exiting.")
+            filepath = Configuration._get_configuration_path()
+            if filepath == "":
                 sys.exit(1)
         elif not os.path.exists(filepath):
             print("The file passed to --config could not be opened. Exiting.")
@@ -98,7 +104,7 @@ class Configuration:
         Configuration.EXECUTABLE_PATH = config.get(
 			"Archiving", "executable_path")
         Configuration.ARCHIVE_PATHS = shlex.split(config.get(
-			"Archiving", "archive_paths"))
+			"Archiving", "archive_paths"), posix=False)
         Configuration.ARCHIVE_PATHS = [
             path.replace("{EXECUTABLE_PATH}", Configuration.EXECUTABLE_PATH)
             for path in Configuration.ARCHIVE_PATHS
@@ -118,6 +124,6 @@ class Configuration:
         Configuration.BACKUP_EXECUTABLE_REGEX = re.compile(config.get(
             "Execution", "backup_executable_regex"))
         Configuration.AUTOPURGE_DUPLICATES = config.getboolean(
-            "Execution", "autopurge_duplicates")
+            "Execution", "autoclean_duplicates")
         Configuration.AUTOPURGE_LIMIT = config.getint(
-            "Execution", "autopurge_limit")
+            "Execution", "autoclean_limit")

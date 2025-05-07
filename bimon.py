@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 
-import argparse
 import os
 import sys
 
@@ -8,7 +7,6 @@ from src import git
 from src import parsers
 from src import storage
 from src import terminal
-
 from src.config import Configuration
 
 
@@ -19,8 +17,21 @@ def main() -> None:
     terminal.init_terminal()
     
     parser = parsers.get_bimon_parser()
-    args = parser.parse_args()
+    clean_args = parsers.preparse_bimon_command(sys.argv[1:])
+    if len(clean_args) == 0:
+        if len(sys.argv) == 1:
+            clean_args = ["--help"]
+        else:
+            print(f"Unrecognized command {sys.argv[1]}. Use --help for help.")
+            return
+        
+    args = parser.parse_args(clean_args)
+    _setup_configuration(args, original_wd)
+    _ensure_workspace(args)
+    args.func(args)
 
+
+def _setup_configuration(args, original_wd: str) -> None:
     config_path = ""
     if args.config is not None:
         config_path = storage.resolve_relative_to(args.config, original_wd)
@@ -34,6 +45,8 @@ def main() -> None:
     if args.print_mode is not None:
         Configuration.PRINT_MODE = args.print_mode
 
+
+def _ensure_workspace(args) -> None:
     workspace = Configuration.WORKSPACE_PATH
     if not os.path.exists(workspace):
         print(f"BiMon requires a Godot workspace at path \"{workspace}\".")
@@ -42,16 +55,14 @@ def main() -> None:
             print("Cloning one there now...")
             should_clone = True
         else:
-            response = input("Clone one there now? [y/N]: ")
-            should_clone = response.strip().lower().startswith("y")
+            response = input("Clone one there now? [Y/n]: ")
+            should_clone = not response.strip().lower().startswith("n")
 
         if should_clone:
             git.clone("https://github.com/godotengine/godot.git", workspace)
         else:
             print("BiMon requires a Godot workspace to function. Exiting.")
             sys.exit(1)
-
-    args.func(args)
 
 
 if __name__ == "__main__":

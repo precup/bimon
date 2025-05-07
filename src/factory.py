@@ -2,8 +2,6 @@ import glob
 import os
 import shlex
 import shutil
-import stat
-import sys
 import time
 from typing import Optional
 
@@ -71,8 +69,7 @@ def compile_uncached(ref: str) -> bool:
     _handle_local_changes()
 
     git.check_out(ref)
-    error_code = _run_scons()
-    return error_code == 0
+    return _run_scons()
 
 
 def _split_list(lst: list, x: int) -> list[list]:
@@ -116,6 +113,9 @@ def _print_compile_status(
         times: dict[str, float], 
         error_commits: set[str], 
         current_commit: str) -> None:
+    if Configuration.PRINT_MODE == PrintMode.QUIET:
+        print(f"Compiling commit {current_commit} ({processed_count + 1} of {job_commits})")
+        return
     cols = terminal.get_cols()
     title = terminal.color_key(f" Compiling #{processed_count + 1} of {job_commits} ")
     print(terminal.box_top(title=title))
@@ -152,8 +152,8 @@ def _print_compile_status(
         full_commit_list=full_commit_list, 
         tags=tags, 
         current_commit=current_commit, 
-        present_versions=present_versions
-    )
+        present_versions=present_versions)
+    
     bottom = terminal.box_bottom()
     if current_bucket is not None:
         bottom = (
@@ -172,7 +172,13 @@ def _get_fraction_completed(commit_list: list[str], present_versions: set[str]) 
     return len(present_commits) / max(1, len(commit_list))
 
 
-def _build_tag_line(tag_times: dict[str, int], bucket_times: list[int]) -> str:
+def _build_tag_line(tags: list[str], bucket_times: list[int]) -> str:
+    tags = [tag for tag in tags if tag.find(".") == tag.rfind(".")]
+    tag_times = git.get_commit_times(tags)
+    tag_times = {
+        tag[:tag.find("-")]: tag_time
+        for tag, tag_time in tag_times.items()
+    }
     tag_buckets = {
         tag: [
             i for i in range(len(bucket_times)) 
@@ -227,12 +233,6 @@ def _print_histogram(
     bucket_fractions += [0] * max(0, cols - 4 - len(bucket_fractions))
 
     if Configuration.SHOW_TAGS_ON_HISTOGRAM:
-        tags = [tag for tag in tags if tag.find(".") == tag.rfind(".")]
-        tag_times = git.get_commit_times(tags)
-        tag_times = {
-            tag[:tag.find("-")]: tag_time
-            for tag, tag_time in tag_times.items()
-        }
         commit_times = git.get_commit_times(
             [bucket[0] for bucket in bucket_commits if len(bucket) > 0]
         )
@@ -240,8 +240,9 @@ def _print_histogram(
             commit_times[bucket[0]] if len(bucket) > 0 else -1
             for bucket in bucket_commits
         ]
-        tag_line = _build_tag_line(tag_times, bucket_times)
-        print(terminal.box_content(tag_line))
+
+        print(terminal.box_content(_build_tag_line(tags, bucket_times)))
+
         current_commit_time = git.get_commit_time(current_commit)
         possible_current_buckets = [
             i for i in range(len(bucket_fractions)) 
@@ -263,8 +264,7 @@ def compile(
         commits: list[str], 
         retry_compress: bool = True, 
         fatal_compress: bool = True,
-        direct_compile: list[str] = [],
-    ) -> bool:
+        direct_compile: list[str] = []) -> bool:
     total_versions = len(commits) + len(direct_compile)
     if total_versions == 0:
         return True
@@ -280,7 +280,9 @@ def compile(
     compiled_versions: list[str] = []
     processable_commits = set(commits) - present_versions
     error_commits: set[str] = set()
+    commit = ""
     while len(error_commits) + len(compiled_versions) < total_versions:
+        # Figure out next commit
         i = len(error_commits) + len(compiled_versions)
         if i > len(direct_compile):
             print("Finding a similar commit to compile next...")
@@ -291,22 +293,21 @@ def compile(
             commit = commits[0]
 
         start_time = time.time()
-        if Configuration.PRINT_MODE == PrintMode.QUIET:
-            print(f"Compiling commit {commit} ({i + 1} / {total_versions})")
-        else:
-            _print_compile_status(
-                tags=tags, 
-                full_commit_list=full_commit_list, 
-                present_versions=present_versions, 
-                processed_count=i, 
-                job_commits=total_versions, 
-                times=times, 
-                error_commits=error_commits, 
-                current_commit=commit
-            )
 
+        # Prepare to compile
+        _print_compile_status(
+            tags=tags, 
+            full_commit_list=full_commit_list, 
+            present_versions=present_versions, 
+            processed_count=i, 
+            job_commits=total_versions, 
+            times=times, 
+            error_commits=error_commits, 
+            current_commit=commit)
         processable_commits.remove(commit)
         git.check_out(commit)
+
+        # Compile
         did_compile = _run_scons()
         if not did_compile:
             if len(compiled_versions) >= _MIN_SUCCESSES:
@@ -318,7 +319,11 @@ def compile(
             print(f"Error while compiling commit {commit}. Skipping.")
             error_commits.add(commit)
             continue
-        cache()
+
+        # Process the compiled commit
+        if not cache():
+            print(f"Error while caching commit {commit}.")
+            return False
         present_versions.add(commit)
         compiled_versions.append(commit)
         if len(compiled_versions) == _MIN_SUCCESSES and len(error_commits) > 0:
@@ -352,7 +357,30 @@ def compile(
     return not Configuration.COMPRESSION_ENABLED or compress(compiled_versions, retry_compress)
 
 
-def cache() -> None:
+def _get_paths_from_archive_paths() -> Optional[list[str]]:
+    abs_workspace_path = os.path.abspath(Configuration.WORKSPACE_PATH)
+    paths = []
+    for archive_path in Configuration.ARCHIVE_PATHS:
+        if glob.escape(archive_path) == archive_path:
+            resolved_archive_path = os.path.join(Configuration.WORKSPACE_PATH, archive_path)
+            if not os.path.exists(resolved_archive_path):
+                print(f"Error while archiving: requested file {archive_path} does not exist.")
+                return None
+            paths.append(resolved_archive_path)
+        else:
+            for file_path in glob.glob(
+                    archive_path, recursive=True, root_dir=Configuration.WORKSPACE_PATH
+                ):
+                abs_file_path = os.path.abspath(file_path)
+                if not abs_file_path.startswith(abs_workspace_path):
+                    print("Error: Attempted to copy a file from outside"
+                        + f" of the workspace directory: {file_path}")
+                    return None
+                paths.append(abs_file_path)
+    return paths
+
+
+def cache() -> bool:
     version_name = git.resolve_ref("HEAD")
     print(f"Caching version {version_name}")
 
@@ -363,38 +391,35 @@ def cache() -> None:
     os.makedirs(version_path, exist_ok=True)
 
     abs_workspace_path = os.path.abspath(Configuration.WORKSPACE_PATH)
-    for archive_path in Configuration.ARCHIVE_PATHS:
-        full_glob_path = os.path.join(Configuration.WORKSPACE_PATH, archive_path)
-        for file_path in glob.glob(full_glob_path, recursive=True):
-            abs_file_path = os.path.abspath(file_path)
-            if not abs_file_path.startswith(abs_workspace_path):
-                print("Error: Attempted to copy a file outside"
-                    + f" the workspace directory: {file_path}")
-                sys.exit(1)
-
-            relative_path = os.path.relpath(abs_file_path, abs_workspace_path)
-            destination_path = os.path.join(version_path, relative_path)
-            os.makedirs(os.path.dirname(destination_path), exist_ok=True)
-            if Configuration.COPY_ON_CACHE:
-                shutil.copy2(abs_file_path, destination_path)
-            else:
-                shutil.move(abs_file_path, destination_path)
+    transfers = _get_paths_from_archive_paths()
+    
+    for transfer_path in transfers:
+        relative_path = os.path.relpath(transfer_path, abs_workspace_path)
+        destination_path = os.path.join(version_path, relative_path)
+        os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+        if Configuration.COPY_ON_CACHE:
+            shutil.copy2(transfer_path, destination_path)
+        else:
+            shutil.move(transfer_path, destination_path)
 
     print(f"Version {version_name} has been successfully cached.")
+    return True
 
 
 def _run_scons(args: Optional[list[str]] = None) -> bool:
     if args is None:
-        args = shlex.split(Configuration.COMPILER_FLAGS)
+        args = shlex.split(Configuration.COMPILER_FLAGS, posix='nt' != os.name)
     return terminal.execute_in_subwindow(
         command=["scons"] + args,
         title="scons",
         rows=Configuration.SUBWINDOW_ROWS,
-        cwd=Configuration.WORKSPACE_PATH,
-    )
+        cwd=Configuration.WORKSPACE_PATH)
 
 
 def clean_build_artifacts() -> None:
     print("Cleaning build artifacts...")
-    _run_scons(["--clean"])
-    print("Build artifacts cleaned.")
+    if _run_scons(["--clean"]):
+        print("Build artifacts cleaned.")
+    else:
+        print("Failed to clean build artifacts.")
+        return

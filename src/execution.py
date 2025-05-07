@@ -11,6 +11,7 @@ from src import terminal
 from src.config import Configuration
 
 _CACHE_NAME = "execution_cache"
+_MAX_CACHE_SIZE = 1000
 
 
 def delete_cache(dry_run: bool = False) -> int:
@@ -28,8 +29,7 @@ def delete_cache(dry_run: bool = False) -> int:
 def _mark_used(commit: str) -> None:
     used_order_str = storage.load_state(_CACHE_NAME)
     used_order = used_order_str.split()
-    loose_versions = set() # TODO
-    used_order = [commit] + [c for c in used_order if c != commit and c in loose_versions]
+    used_order = [commit] + [c for c in used_order if c != commit][:_MAX_CACHE_SIZE]
     storage.save_state(_CACHE_NAME, " ".join(used_order))
 
 
@@ -40,33 +40,77 @@ def launch(
         discard: bool, 
         cached_only: bool, 
         wd: str = "") -> bool:
+    return launch_with_automation(
+        ref,
+        execution_parameters,
+        present_versions,
+        discard,
+        cached_only,
+        wd) != "error"
+
+
+def launch_with_automation(
+        ref: str, 
+        execution_parameters: str, 
+        present_versions: set[str], 
+        discard: bool, 
+        cached_only: bool, 
+        wd: str = "",
+        automate_good: Optional[str] = None,
+        automate_good_regex: Optional[re.Pattern] = None,
+        automate_bad: Optional[str] = None,
+        automate_bad_regex: Optional[re.Pattern] = None,
+        automate_crash: Optional[str] = None,
+        automate_exit: Optional[str] = None,
+        automate_script: Optional[str] = None) -> str:
     commit = git.resolve_ref(ref)
     if commit == "":
         print(f"Invalid ref: \"{ref}\" could not be resolved.")
-        return False
+        return "error"
 
     if commit not in present_versions:
         if cached_only:
             print(f"Commit {git.get_short_name(commit)} is not cached."
                 + " Skipping due to --cached-only.")
-            return False
+            return "error"
             
         if not factory.compile_uncached(commit):
             print(f"Failed to compile commit {git.get_short_name(commit)}.")
-            return False
+            return "error"
 
         if discard:
-            return _launch_folder(Configuration.WORKSPACE_PATH, execution_parameters, wd)
+            return _launch_folder(
+                Configuration.WORKSPACE_PATH, 
+                execution_parameters, 
+                wd,
+                automate_good,
+                automate_good_regex,
+                automate_bad,
+                automate_bad_regex,
+                automate_crash,
+                automate_exit,
+                automate_script)
         
-        factory.cache()
+        if not factory.cache():
+            return "error"
         present_versions.add(commit)
         
     if not storage.extract_version(commit):
         print(f"Failed to extract commit {git.get_short_name(commit)}.")
-        return False
+        return "error"
     
     _mark_used(commit)
-    return _launch_folder(storage.get_version_folder(commit), execution_parameters, wd)
+    return _launch_folder(
+        storage.get_version_folder(commit), 
+        execution_parameters, 
+        wd,
+        automate_good,
+        automate_good_regex,
+        automate_bad,
+        automate_bad_regex,
+        automate_crash,
+        automate_exit,
+        automate_script)
 
 
 def _find_executable(
@@ -87,7 +131,17 @@ def _find_executable(
     return None
 
 
-def _launch_folder(workspace_path: str, execution_parameters: str, wd: str) -> bool:
+def _launch_folder(
+        workspace_path: str, 
+        execution_parameters: str, 
+        wd: str,
+        automate_good: Optional[str],
+        automate_good_regex: Optional[re.Pattern],
+        automate_bad: Optional[str],
+        automate_bad_regex: Optional[re.Pattern],
+        automate_crash: Optional[str],
+        automate_exit: Optional[str],
+        automate_script: Optional[str]) -> str:
     executable_path = _find_executable(
         workspace_path, Configuration.EXECUTABLE_PATH, Configuration.BACKUP_EXECUTABLE_REGEX
     )
@@ -96,10 +150,19 @@ def _launch_folder(workspace_path: str, execution_parameters: str, wd: str) -> b
         return False
     executable_path = str(Path(executable_path).resolve())
 
-    return terminal.execute_in_subwindow(
-        command=[executable_path] + shlex.split(execution_parameters),
+    command = [executable_path] + shlex.split(execution_parameters, posix='nt' != os.name)
+    if automate_script is not None:
+        command = [automate_script] + command
+
+    return terminal.execute_in_subwindow_with_automation(
+        command=command,
         title="godot", 
         rows=Configuration.SUBWINDOW_ROWS,
         eat_kill=True,
         cwd=wd,
-    )
+        automate_good=automate_good,
+        automate_good_regex=automate_good_regex,
+        automate_bad=automate_bad,
+        automate_bad_regex=automate_bad_regex,
+        automate_crash=automate_crash,
+        automate_exit=automate_exit)

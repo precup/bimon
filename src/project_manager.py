@@ -36,11 +36,8 @@ def get_project_path(project_name: str) -> str:
     if not is_valid_project_name(project_name):
         return ""
     project_path = os.path.join(_PROJECT_FOLDER, project_name)
-    if not os.path.exists(project_path):
-        os.mkdir(project_path)
     return project_path
 
-# TODO it's a little awkward these aren't in git.py
 def get_issue_number(flexible_arg: str) -> int:
     issue_number, is_issue = get_github_number(flexible_arg)
     if issue_number == -1 or not is_issue:
@@ -103,8 +100,8 @@ def get_approx_issue_creation_time(issue: int) -> int:
     return -1
 
 
-def purge(projects: bool = False, temp_files: bool = False, dry_run: bool = False) -> int:
-    purge_count = 0
+def clean(projects: bool = False, temp_files: bool = False, dry_run: bool = False) -> int:
+    clean_count = 0
 
     if projects and os.path.exists(_PROJECT_FOLDER):
         if dry_run or Configuration.PRINT_MODE == PrintMode.VERBOSE:
@@ -112,24 +109,24 @@ def purge(projects: bool = False, temp_files: bool = False, dry_run: bool = Fals
                 project_path = os.path.join(_PROJECT_FOLDER, project)
                 if dry_run:
                     print(f"Would delete {project_path}")
-                    purge_count += storage.get_recursive_file_count(project_path)
+                    clean_count += storage.get_recursive_file_count(project_path)
                 else:
                     print(f"Deleting {project_path}")
-                    purge_count += storage.rm(project_path)
+                    clean_count += storage.rm(project_path)
         else:
-            purge_count += storage.rm(_PROJECT_FOLDER)
+            clean_count += storage.rm(_PROJECT_FOLDER)
             os.mkdir(_PROJECT_FOLDER)
 
     elif temp_files and os.path.exists(_TEMPORARY_ZIP):
         if dry_run:
             print(f"Would delete {_TEMPORARY_ZIP}")
-            purge_count += 1
+            clean_count += 1
         else:
             if Configuration.PRINT_MODE == PrintMode.VERBOSE:
                 print(f"Deleting {_TEMPORARY_ZIP}")
-            purge_count += storage.rm(_TEMPORARY_ZIP)
+            clean_count += storage.rm(_TEMPORARY_ZIP)
 
-    return purge_count
+    return clean_count
 
 
 def extract_project(zip_filename: str, project_name: str, title: Optional[str] = None) -> str:
@@ -231,20 +228,20 @@ def find_project_file(folder: str, silent: bool = False) -> Optional[str]:
         if all_files_prefix is None:
             all_files_prefix = folder
         for i, file in enumerate(project_files):
-            print(f"{i}: {file[file.index(all_files_prefix) + len(all_files_prefix):]}")
-        # TODO should this have a default
-        query = "Enter the number of the project.godot file to use, or n if none look right: "
-        choice = input(query).strip().lower()
-        while True:
-            if choice.startswith("n"):
-                return None
-            if choice.isdigit() and int(choice) < len(project_files):
-                break
-            choice = input("Invalid choice. Please enter a valid number or \"n\": ")
-            choice = choice.strip().lower()
-        return project_files[int(choice)]
+            print(f"{i + 1}: {file[file.index(all_files_prefix) + len(all_files_prefix):]}")
+        choice = _get_menu_choice(
+            "Enter the number of the project.godot file to use, or n if none look right [1]: ",
+            "Invalid choice. Please enter a valid number or \"n\" [1]: ",
+            set([str(i + 1) for i in range(len(project_files))] + ["none"]),
+            default="1")
+        
+        if choice.startswith("n"):
+            return None
+        return project_files[int(choice) - 1]
+    
     elif len(project_files) == 1:
         return project_files[0]
+    
     print("No project.godot file found in the project folder.")
     response = input("Would you like to create a new one? [Y/n]: ").strip().lower()
     if response.startswith("n"):
@@ -307,7 +304,7 @@ def create_project_file(location: str) -> str:
 def create_project(
         project_name: str = "", 
         issue_number: int = -1, 
-        title: Optional[str] = "", 
+        title: Optional[str] = None, 
         force: bool = False) -> str:
     if project_name == "":
         if issue_number != -1:
@@ -407,21 +404,20 @@ def get_mrp(issue: int) -> str:
             if len(zip_links) > body_links_len:
                 source_type = "issue" if i < body_links_len else "comment"
                 body_info = f" (in {source_type})"
-            print(str(i) + body_info + f": {link}")
+            print(str(i + 1) + body_info + f": {link}")
         print("c: Create a new blank project")
-        query = "Enter the number of the zip file to download, or c to create a blank project: "
-        choice = input(query).strip().lower()
-
-        while (
-                not choice.startswith("c") 
-                and (not choice.isdigit() or int(choice) >= len(zip_links))
-            ):
-            choice = input("Invalid choice. Please enter a valid number or \"c\": ")
-            choice = choice.strip().lower()
-
-        if not choice.startswith("c"):
-            zip_link = zip_links[int(choice)]
+        choice = _get_menu_choice(
+            "Enter the number of the zip file to download, or c to create a blank project [1]: ",
+            "Invalid choice. Please enter a valid number or \"c\" [1]: ",
+            set([str(i + 1) for i in range(len(zip_links))] + ["create", "none"]),
+            default="1")
+        
+        if choice == "none":
+            return ""
+        if choice == "create":
+            zip_link = zip_links[int(choice) - 1]
             return zip_filename if download_project(zip_link, zip_filename) else ""
+        
     else:
         print(f"No MRP found in issue #{issue}.")
         response = input("Would you like to create a blank project to use? [Y/n]: ")
@@ -429,3 +425,26 @@ def get_mrp(issue: int) -> str:
             return ""
 
     return create_project(str(issue))
+
+
+def _get_menu_choice(
+        prompt: str, 
+        error_prompt: str, 
+        valid_choices: set[str], 
+        default: Optional[str] = None) -> str:
+    choice = input(prompt)
+    while True:
+        choice = choice.strip().lower()
+        if choice == "" and default is not None:
+            choice = default
+        if choice != "":
+            if choice in valid_choices:
+                return choice
+
+            matches = [c for c in valid_choices if c.startswith(choice)]
+            if len(matches) == 1:
+                return matches[0]
+            elif len(matches) > 1:
+                print("Ambiguous choice. Please enter a more specific choice.")
+
+        choice = input(error_prompt)

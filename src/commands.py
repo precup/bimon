@@ -46,6 +46,7 @@ def update_command(
     if update_ranges is None or len(update_ranges) == 0:
         update_ranges = [f"{Configuration.RANGE_START}..{Configuration.RANGE_END}"]
 
+    print("Fetching...")
     git.fetch()
     parsed_ranges = []
     for update_range in update_ranges:
@@ -100,17 +101,15 @@ def repro_command(
         project: Optional[str],
         ref: Optional[str],
         flexible_args: list[str],
-        cached_only: bool=False,
-    ) -> None:
-    _handle_autopurge()
+        cached_only: bool=False) -> None:
+    _handle_autoclean()
     execution_parameters, project, _, commit, _, _ = _parse_flexible_args(
         flexible_args, 
         execution_parameters, 
         project=project, 
         issue=issue, 
         single_ref_mode=True, 
-        ref=ref
-    )
+        ref=ref)
     present_versions = storage.get_present_versions()
     ignored_commits = storage.get_ignored_commits()
     compiler_error_commits = storage.get_compiler_error_commits()
@@ -147,8 +146,8 @@ def repro_command(
         present_versions=present_versions, 
         discard=discard, 
         cached_only=False, 
-        wd=project
-    )
+        wd=project)
+    
     if not success:
         sys.exit(1)
 
@@ -162,16 +161,17 @@ def bisect_command(
         project: Optional[str],
         issue: Optional[str],
         flexible_args: list[str],
-        ref_range: Optional[str],
-    ) -> None:
-    _handle_autopurge()
+        ref_range: Optional[str]) -> None:
+    _handle_autoclean()
     last_fetch_time = git.get_last_fetch_time()
     if last_fetch_time == -1 or last_fetch_time < 7 * 24 * 60 * 60:
         print("Trying to fetch since it's been a while...")
         try: 
             git.fetch()
-        except:
+        except git.GitError:
+            print("Failed to fetch. This is probably fine, continuing anyway.")
             pass
+    git.update_neighbors()
 
     execution_parameters, project, issue_number, _, goods, bads = _parse_flexible_args(
         flexible_args, 
@@ -179,8 +179,8 @@ def bisect_command(
         project=project, 
         issue=issue, 
         single_ref_mode=False, 
-        ref_range=ref_range
-    )
+        ref_range=ref_range)
+    
     issue_time = -1
     if issue_number >= 0 and not ignore_date:
         issue_time = project_manager.get_approx_issue_creation_time(issue_number)
@@ -193,8 +193,7 @@ def bisect_command(
         end_timestamp=issue_time, 
         wd=project, 
         initial_goods=goods, 
-        initial_bads=bads,
-    )
+        initial_bads=bads)
 
     print("Entering bisect interactive mode. Type \"help\" for a list of commands.")
     bisector.queue_decompress_nexts()
@@ -208,7 +207,24 @@ def bisect_command(
                 continue
             terminal.add_to_history(command)
             try:
-                args = parser.parse_args(shlex.split(command))
+                split_args = shlex.split(command, posix='nt' != os.name)
+                clean_args = parsers.preparse_bisect_command(split_args)
+                has_help = '--help' in split_args or '-h' in split_args
+                if clean_args.lower() == "set-params" and not has_help:
+                    # Bit of a hack, but we don't want to require this to be escaped
+                    # so we bypass argparse
+                    execution_parameters = command.strip()
+                    while len(execution_parameters) > 0 and not execution_parameters[0].isspace():
+                        execution_parameters = execution_parameters[1:]
+                    execution_parameters = execution_parameters.strip()
+                    bisector.set_parameters_command(execution_parameters)
+                    continue
+
+                if len(clean_args) == 0:
+                    if len(split_args) > 0:
+                        print(f"Unrecognized command: {split_args[0]}, use \"help\" for help.")
+                    continue
+                args = parser.parse_args(clean_args)
                 if args.func(bisector, args) == bisect.Bisector.CommandResult.EXIT:
                     break
             except AttributeError as e:
@@ -246,7 +262,7 @@ def extract_command(ref: str, folder: Optional[str]) -> None:
         sys.exit(1)
 
 
-def purge_command(
+def clean_command(
         projects: Optional[bool], 
         duplicates: Optional[bool], 
         caches: Optional[bool], 
@@ -254,26 +270,26 @@ def purge_command(
         loose_files: Optional[bool], 
         build_artifacts: Optional[bool],
         dry_run: bool = False) -> None:
-    purge_count = 0
+    clean_count = 0
     if duplicates:
-        purge_count += storage.purge_duplicate_files(dry_run=dry_run)
+        clean_count += storage.clean_duplicate_files(dry_run=dry_run)
     if projects:
-        purge_count += project_manager.purge(projects=True, dry_run=dry_run)
+        clean_count += project_manager.clean(projects=True, dry_run=dry_run)
     if temp_files:
-        purge_count += project_manager.purge(temp_files=True, dry_run=dry_run)
+        clean_count += project_manager.clean(temp_files=True, dry_run=dry_run)
     if build_artifacts:
         if dry_run:
             print("Build artifacts will be deleted.")
         else:
             factory.clean_build_artifacts()
     if caches:
-        purge_count += git.delete_cache(dry_run)
-        purge_count += execution.delete_cache(dry_run)
+        clean_count += git.delete_cache(dry_run)
+        clean_count += execution.delete_cache(dry_run)
     if loose_files:
-        purge_count += storage.purge_loose_files(dry_run)
+        clean_count += storage.clean_loose_files(dry_run)
     
-    if not build_artifacts or purge_count > 0:
-        print(f"Purged {purge_count} items.")
+    if not build_artifacts or clean_count > 0:
+        print(f"Purged {clean_count} items.")
 
 
 def compile_command(ref_ranges: list[str]) -> None:
@@ -345,22 +361,31 @@ def help_command(
         print("That command is unknown.")
         print("Available commands:")
         for key_command, _, _ in help_messages:
-            print(f"  {"/".join([key_command] + aliases.get(key_command, []))}")
+            print("  " + "/".join([key_command] + aliases.get(key_command, [])))
 
 
 def export_command(project_name: str, export_path: str, title: Optional[str] = None) -> None:
     if any(c in project_name for c in project_manager.INVALID_NAME_CHARS):
-        print(f"Invalid project name: may not contain any of the following characters: {project_manager.INVALID_NAME_CHARS}")
+        print("Invalid project name: may not contain any of the following characters: "
+            + "".join(project_manager.INVALID_NAME_CHARS))
         sys.exit(1)
     project_manager.export_project(project_name, export_path, title=title)
+
+
+def create_command(project_name: str, title: Optional[str] = None) -> None:
+    if any(c in project_name for c in project_manager.INVALID_NAME_CHARS):
+        print("Invalid project name: may not contain any of the following characters: "
+            + "".join(project_manager.INVALID_NAME_CHARS))
+        sys.exit(1)
+    project_manager.create_project(project_name, title=title)
 
 
 ############################################################################3
 
 
-def _handle_autopurge() -> None:
+def _handle_autoclean() -> None:
     if Configuration.AUTOPURGE_DUPLICATES:
-        storage.purge_duplicate_files(keep_count=Configuration.AUTOPURGE_LIMIT)
+        storage.clean_duplicate_files(keep_count=Configuration.AUTOPURGE_LIMIT)
 
 
 def _get_missing_commits(commit_list: list[str], n: int) -> list[str]:
@@ -432,7 +457,9 @@ def _parse_flexible_args(
         bads.add(bad_commit)
     
     def add_range(ref_range: str) -> None:
-        start_commit, end_commit = _get_range_parts(ref_range, allow_empty=True)
+        start_commit, end_commit = _get_range_parts(
+            ref_range, allow_empty=True, allow_nonancestor=True
+        )
         if start_commit != "":
             add_to_goods(start_commit)
         if end_commit != "":
@@ -523,8 +550,22 @@ def _parse_flexible_args(
             sys.exit(0)
         else:
             project = project_manager.get_project_path("")
+            if not os.path.exists(project):
+                os.mkdir(project)
     elif not project.startswith("http"):
-        project = storage.resolve_relative_to(project, _ORIGINAL_WD)
+        project_name_path = project_manager.get_project_path(project)
+        if project_name_path != "" and os.path.exists(project_name_path):
+            project = project_name_path
+        else:
+            project = storage.resolve_relative_to(project, _ORIGINAL_WD)
+            if not os.path.exists(project):
+                print(f"Project \"{project}\" does not exist.")
+                response = input("Create one there now? [y/N]: ")
+                if response.strip().lower().startswith("y"):
+                    os.mkdir(project)
+                    project_manager.create_project_file(project)
+                else:
+                    sys.exit(1)
 
     if project.endswith(".zip"):
         if project.startswith("http"):
@@ -539,7 +580,7 @@ def _parse_flexible_args(
         project = project[:-len("project.godot")]
 
     if "{PROJECT}" in execution_parameters:
-        execution_parameters = execution_parameters.replace("{PROJECT}", project)
+        execution_parameters = execution_parameters.replace("{PROJECT}", "./")
 
     # TODO this organization is a bit awkward
     if issue_number != -1:
@@ -550,7 +591,11 @@ def _parse_flexible_args(
     return execution_parameters, project, issue_number, commit, goods, bads
 
 
-def _get_range_error(start_ref: str, end_ref: str, allow_empty: bool) -> Optional[str]:
+def _get_range_error(
+        start_ref: str, 
+        end_ref: str, 
+        allow_empty: bool, 
+        allow_nonancestor: bool = False) -> Optional[str]:
     start_ref = start_ref.strip()
     if start_ref == "":
         if not allow_empty:
@@ -570,11 +615,18 @@ def _get_range_error(start_ref: str, end_ref: str, allow_empty: bool) -> Optiona
             return f"Invalid range: end commit ({end_ref}) was not found."
 
     if start_ref != "" and end_ref != "" and not git.is_ancestor(start_commit, end_commit):
-        return f"Invalid range: start ({start_ref}) is not an ancestor of end ({end_ref})."
+        if allow_nonancestor:
+            return f"Invalid range: start ({start_ref}) is not an ancestor of end ({end_ref})."
+        else:
+            print("Range start is not an ancestor of range end."
+                + " This is probably fine for a bisect, continuing.")
     return None
 
 
-def _get_range_parts(ref_range: str, allow_empty: bool = False) -> tuple[str, str]:
+def _get_range_parts(
+        ref_range: str, 
+        allow_empty: bool = False, 
+        allow_nonancestor: bool = False) -> tuple[str, str]:
     if ref_range.count("..") != 1:
         print("Range must be in the format \"start_ref..end_ref\".")
         sys.exit(1)
