@@ -115,6 +115,9 @@ mypy
     repro
 - 1 revisit single character arg support and defaults
 - 1 src/commands.py:234:                # TODO the help message on this is awful formatting wise
+- 1 asks twice before overwriting a project that already exists with a new blank one
+- 1 should be able to resolve 4.5-dev1 tags
+- 1 lag during bisect sucks, especially inputting initial revs
 
 - 8 Code function level clean up pass - 969 + 573 + 545 = 2087 
     git - 280

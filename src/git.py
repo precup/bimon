@@ -110,7 +110,7 @@ def update_neighbors(commits: Optional[set[str]] = None) -> None:
         print("Updating git cache...")
         should_update = True
     else:
-        should_update = all(
+        should_update = not all(
             commit in _parent_cache and commit in _child_cache for commit in commits
         )
     if should_update:
@@ -119,7 +119,7 @@ def update_neighbors(commits: Optional[set[str]] = None) -> None:
             for line in lines:
                 parts = line.split()
                 cache[parts[0]] = set(parts[1:])
-            
+        
         save_cache()
 
 
@@ -251,7 +251,7 @@ def _get_all_relative_types(ref: str, relative_cache: dict[str, set[str]]) -> se
         update_neighbors({curr})
         for parent in relative_cache[curr]:
             if parent not in seen:
-                seen.add(curr)
+                seen.add(parent)
                 queue.append(parent)
     return seen
 
@@ -396,30 +396,32 @@ def _get_interesting_counts(
         boundary_commits: set[str]) -> tuple[dict[str, int], dict[str, int]]:
     interesting_counts: dict[str, int] = {}
     culled_counts: dict[str, int] = {}
-    unculled_counts: dict[str, int] = {}
+    # unculled_counts: dict[str, int] = {}
     queue = deque(commit for commit, neighbors in backward_sets.items() if len(neighbors) == 0)
-
+    added = set(queue)
     while len(queue) > 0:
         curr = queue.popleft()
 
         interesting_counts[curr] = 1 if curr in interesting else 0
         culled_counts[curr] = 0
-        unculled_counts[curr] = 0
+        # unculled_counts[curr] = 0
 
         for neighbor in backward_sets[curr]:
             interesting_counts[curr] += interesting_counts[neighbor]
-            culled_counts[curr] += culled_counts[neighbor]
-            unculled_counts[curr] += unculled_counts[neighbor]
+        #     culled_counts[curr] += culled_counts[neighbor]
+        #     unculled_counts[curr] += unculled_counts[neighbor]
 
-        if curr in boundary_commits:
-            culled_counts[curr] += 1 + unculled_counts[curr]
-            unculled_counts[curr] = 0
-        else:
-            unculled_counts[curr] += 1
+        # if curr in boundary_commits:
+        #     culled_counts[curr] += 1 + unculled_counts[curr]
+        #     unculled_counts[curr] = 0
+        # else:
+        #     unculled_counts[curr] += 1
 
         for neighbor in forward_sets[curr]:
-            if all(backward in interesting_counts for backward in backward_sets[neighbor]):
+            if (all(backward in interesting_counts for backward in backward_sets[neighbor])
+                and neighbor not in added):
                 queue.append(neighbor)
+                added.add(neighbor)
 
     return interesting_counts, culled_counts
 
@@ -456,6 +458,8 @@ def get_bisect_commits_with_compile_counts(
         path_spec: Optional[str] = None, 
         boundary_commits: set[str] = set(),
         before: int = -1) -> list[tuple[str, float]]:
+    import time
+    start_time = time.time()
     interesting_commit_list = get_bounded_commits(
         good_refs, bad_refs, path_spec, before, ancestor_exclusive=True
     )
@@ -468,8 +472,10 @@ def get_bisect_commits_with_compile_counts(
         ]
     
     interesting_commits = set(interesting_commit_list)
+    start_time = time.time()
     descendant_interesting_counts, descendant_culled_counts = _get_interesting_counts(
         interesting_commits, _child_cache, _parent_cache, boundary_commits)
+    start_time = time.time()
     ancestor_interesting_counts, ancestor_culled_counts = _get_interesting_counts(
         interesting_commits, _parent_cache, _child_cache, boundary_commits)
     culled_counts = {
