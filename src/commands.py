@@ -1,3 +1,4 @@
+import argparse
 import os
 import shlex
 import string
@@ -43,25 +44,10 @@ def update_command(
     git.load_cache()
     signal_handler.install()
 
-    if update_ranges is None or len(update_ranges) == 0:
-        update_ranges = [f"{Configuration.RANGE_START}..{Configuration.RANGE_END}"]
-
     print("Fetching...")
     git.fetch()
-    parsed_ranges = []
-    for update_range in update_ranges:
-        parsed_ranges.append(_get_range_parts(update_range, allow_empty=True))
-        
-    commit_list = []
-    seen = set()
-    for start, end in parsed_ranges:
-        for commit in git.get_commit_list(start, end):
-            if commit not in seen:
-                seen.add(commit)
-                commit_list.append(commit)
-    if len(commit_list) == 0:
-        print("Invalid range: there were no commits found in the update range(s).")
-        sys.exit(1)
+
+    commit_list = _get_commit_list_from_ranges(update_ranges)
 
     if cursor_ref is not None and len(cursor_ref) > 0:
         cursor_commit = git.resolve_ref(cursor_ref)
@@ -75,15 +61,15 @@ def update_command(
         if cursor_commit == "" or cursor_commit is None:
             cursor_commit = commit_list[-1]
 
-    cut = commit_list.index(cursor_commit)
-    if cut < 0:
-        print(f"The cursor commit {cursor_commit} was not in the commit range(s).")
-        sys.exit(1)
-
     missing_commits = list(_get_missing_commits(commit_list, 1 if n is None else n))
     if len(missing_commits) == 0:
         print("All the requested commits are already cached or ignored.")
         sys.exit(0)
+    
+    cut = commit_list.index(cursor_commit)
+    if cut < 0:
+        print(f"The cursor commit {cursor_commit} was not in the commit range(s).")
+        sys.exit(1)
 
     while commit_list[cut] not in missing_commits:
         cut -= 1
@@ -94,8 +80,8 @@ def update_command(
         sys.exit(1)
 
 
-def repro_command(
-        execution_parameters: Optional[str],
+def run_command(
+        execution_args: Optional[str],
         discard: bool,
         issue: Optional[str],
         project: Optional[str],
@@ -103,9 +89,9 @@ def repro_command(
         flexible_args: list[str],
         cached_only: bool=False) -> None:
     _handle_autoclean()
-    execution_parameters, project, _, commit, _, _ = _parse_flexible_args(
+    execution_args, project, _, commit, _, _ = _parse_flexible_args(
         flexible_args, 
-        execution_parameters, 
+        execution_args, 
         project=project, 
         issue=issue, 
         single_ref_mode=True, 
@@ -122,11 +108,11 @@ def repro_command(
             print("Using the most recent cached version.")
             commit = commit_list[-1]
         elif cached_only:
-            print("No cached versions found to repro with.")
+            print("No cached versions found to run.")
             print("Try running without --cached-only or running an update or compile.")
             sys.exit(1)
         else:
-            print("No cached versions found to repro with.")
+            print("No cached versions found to run.")
             print("Using the workspace HEAD.")
             commit = git.resolve_ref("HEAD")
     else:
@@ -142,7 +128,7 @@ def repro_command(
 
     success = execution.launch(
         ref=commit, 
-        execution_parameters=execution_parameters, 
+        execution_args=execution_args, 
         present_versions=present_versions, 
         discard=discard, 
         cached_only=False, 
@@ -153,7 +139,7 @@ def repro_command(
 
 
 def bisect_command(
-        execution_parameters: Optional[str],
+        execution_args: Optional[str],
         discard: bool,
         cached_only: bool,
         ignore_date: bool,
@@ -167,11 +153,10 @@ def bisect_command(
     if last_fetch_time == -1 or last_fetch_time < 7 * 24 * 60 * 60:
         print("Trying to fetch since it's been a while...")
         git.fetch()
-    git.update_neighbors()
 
-    execution_parameters, project, issue_number, _, goods, bads = _parse_flexible_args(
+    execution_args, project, issue_number, _, goods, bads = _parse_flexible_args(
         flexible_args, 
-        execution_parameters, 
+        execution_args, 
         project=project, 
         issue=issue, 
         single_ref_mode=False, 
@@ -184,7 +169,7 @@ def bisect_command(
     bisector = bisect.Bisector(
         discard=discard, 
         cached_only=cached_only, 
-        execution_parameters=execution_parameters, 
+        execution_args=execution_args, 
         path_spec=path_spec, 
         end_timestamp=issue_time, 
         wd=project, 
@@ -205,29 +190,31 @@ def bisect_command(
             try:
                 split_args = shlex.split(command, posix='nt' != os.name)
                 clean_args = parsers.preparse_bisect_command(split_args)
-                has_help = '--help' in split_args or '-h' in split_args
-                if clean_args[0] == "set-params" and not has_help:
-                    # Bit of a hack, but we don't want to require this to be escaped
-                    # so we bypass argparse
-                    execution_parameters = command.strip()
-                    while len(execution_parameters) > 0 and not execution_parameters[0].isspace():
-                        execution_parameters = execution_parameters[1:]
-                    execution_parameters = execution_parameters.strip()
-                    bisector.set_parameters_command(execution_parameters)
-                    continue
 
                 if len(clean_args) == 0:
                     if len(split_args) > 0:
-                        print(f"Unrecognized command: {split_args[0]}, use \"help\" for help.")
+                        print(f"unrecognized command: {split_args[0]}, use \"help\" for help.")
                     continue
+
+                has_help = '--help' in split_args or '-h' in split_args
+                if clean_args[0] == "set-arguments" and not has_help:
+                    # Bit of a hack, but we don't want to require this to be escaped
+                    # so we bypass argparse
+                    execution_args = command.strip()
+                    while len(execution_args) > 0 and not execution_args[0].isspace():
+                        execution_args = execution_args[1:]
+                    execution_args = execution_args.strip()
+                    bisector.set_arguments_command(execution_args)
+                    continue
+
                 args = parser.parse_args(clean_args)
                 if args.func(bisector, args) == bisect.Bisector.CommandResult.EXIT:
                     break
+
             except AttributeError as e:
                 print("Invalid command or option:", e)
-            except SystemExit as e:
-                # TODO the help message on this is awful formatting wise
-                pass
+            except argparse.ArgumentError as e:
+                print(e)
         except KeyboardInterrupt:
             print()
             continue
@@ -420,24 +407,14 @@ def _exit_if_duplicate(
         sys.exit(1)
 
 
-def _parse_flexible_args(
+def _determine_flexible_args(
         flexible_args: list[str],
-        execution_parameters: Optional[str],
         single_ref_mode: bool = True,
         project: Optional[str] = None,
         issue: Optional[str] = None,
         ref: Optional[str] = None,
-        ref_range: Optional[str] = None,
-    ) -> tuple[str, str, int, Optional[str], set[str], set[str]]:
-    if project is not None and len(project.strip()) == "":
-        project = None
-    if issue is not None and len(issue.strip()) == "":
-        issue = None
-    if ref is not None and len(ref.strip()) == "":
-        ref = None
-    if ref_range is not None and len(ref_range.strip()) == "":
-        ref_range = None
-
+        ref_range: Optional[str] = None
+        ) -> tuple[Optional[str], Optional[int], Optional[str], set[str], set[str]]:
     goods: set[str] = set()
     bads: set[str] = set()
     def add_to_goods(good_commit: str) -> None:
@@ -453,9 +430,7 @@ def _parse_flexible_args(
         bads.add(bad_commit)
     
     def add_range(ref_range: str) -> None:
-        start_commit, end_commit = _get_range_parts(
-            ref_range, allow_empty=True, allow_nonancestor=True
-        )
+        start_commit, end_commit = _get_range_parts(ref_range, allow_empty=True)
         if start_commit != "":
             add_to_goods(start_commit)
         if end_commit != "":
@@ -476,8 +451,12 @@ def _parse_flexible_args(
             github_number, is_issue = project_manager.get_github_number(who_knows)
             if github_number != -1:
                 if is_issue:
+                    print("Interpreting", who_knows, "as an issue number.")
+                    print("Issue link:", project_manager.ISSUES_URL + str(github_number))
                     possible_issue_number = github_number
                 else:
+                    print("Interpreting", who_knows, "as a pull request number.")
+                    print("Pull request link:", project_manager.PULLS_URL + str(github_number))
                     pull_number = github_number
                     git.check_out_pull(pull_number)
                     pull_ref = git.get_pull_branch_name(pull_number)
@@ -517,14 +496,45 @@ def _parse_flexible_args(
         _exit_if_duplicate(project, project_flexible, "project", who_knows)
         project_flexible = who_knows
 
-    commit = None
-    if issue is not None:
-        issue_number = project_manager.get_issue_number(issue)
     if project_flexible is not None:
         project = project_flexible
     if single_ref_mode:
         if ref_flexible is not None:
             ref = ref_flexible
+    if issue is not None:
+        issue_number = project_manager.get_issue_number(issue)
+    
+    return project, issue_number, ref, goods, bads
+
+
+def _parse_flexible_args(
+        flexible_args: list[str],
+        execution_args: Optional[str],
+        single_ref_mode: bool = True,
+        project: Optional[str] = None,
+        issue: Optional[str] = None,
+        ref: Optional[str] = None,
+        ref_range: Optional[str] = None,
+    ) -> tuple[str, str, int, Optional[str], set[str], set[str]]:
+    if project is not None and len(project.strip()) == "":
+        project = None
+    if issue is not None and len(issue.strip()) == "":
+        issue = None
+    if ref is not None and len(ref.strip()) == "":
+        ref = None
+    if ref_range is not None and len(ref_range.strip()) == "":
+        ref_range = None
+
+    project, issue_number, ref, goods, bads = _determine_flexible_args(
+        flexible_args, 
+        single_ref_mode=single_ref_mode, 
+        project=project, 
+        issue=issue, 
+        ref=ref, 
+        ref_range=ref_range)
+
+    commit = None
+    if single_ref_mode:
         if ref is not None:
             possible_pull_number = project_manager.get_pull_number(ref)
             if possible_pull_number != -1:
@@ -536,13 +546,13 @@ def _parse_flexible_args(
                 print(f"Invalid ref: {ref} was not found.")
                 sys.exit(1)
 
-    if execution_parameters is None:
-        execution_parameters = Configuration.DEFAULT_EXECUTION_PARAMETERS
+    if execution_args is None:
+        execution_args = Configuration.DEFAULT_EXECUTION_ARGS
 
     if project is None or project == "":
         project = project_manager.get_mrp(issue_number)
-        if project == "" and "{PROJECT}" in execution_parameters:
-            print("Execution parameters require a project but none was provided.")
+        if project == "" and "{PROJECT}" in execution_args:
+            print("Execution arguments require a project but none was provided.")
             sys.exit(1)
     elif not project.startswith("http"):
         project_name_path = project_manager.get_project_path(project)
@@ -572,16 +582,10 @@ def _parse_flexible_args(
     elif project.endswith("project.godot"):
         project = project[:-len("project.godot")]
 
-    if "{PROJECT}" in execution_parameters:
-        execution_parameters = execution_parameters.replace("{PROJECT}", "./")
+    if "{PROJECT}" in execution_args:
+        execution_args = execution_args.replace("{PROJECT}", "./")
 
-    # TODO this organization is a bit awkward
-    if issue_number != -1:
-        print("Issue link:", project_manager.ISSUES_URL + str(issue_number))
-    if pull_number != -1:
-        print("Pull request link:", project_manager.PULLS_URL + str(issue_number))
-
-    return execution_parameters, project, issue_number, commit, goods, bads
+    return execution_args, project, issue_number, commit, goods, bads
 
 
 def _get_range_error(
@@ -632,3 +636,25 @@ def _get_range_parts(
         git.resolve_ref(start_ref) if start_ref != "" else "",
         git.resolve_ref(end_ref) if end_ref != "" else "",
     )
+
+
+def _get_commit_list_from_ranges(ref_ranges: Optional[list[str]]) -> list[str]:
+    if ref_ranges is None or len(ref_ranges) == 0:
+        ref_ranges = [f"{Configuration.RANGE_START}..{Configuration.RANGE_END}"]
+    parsed_ranges = []
+    for update_range in ref_ranges:
+        parsed_ranges.append(_get_range_parts(update_range, allow_empty=True))
+        
+    commit_list = []
+    seen = set()
+    for start, end in parsed_ranges:
+        for commit in git.get_commit_list(start, end):
+            if commit not in seen:
+                seen.add(commit)
+                commit_list.append(commit)
+
+    if len(commit_list) == 0:
+        print("Invalid range: there were no commits found in the update range(s).")
+        sys.exit(1)
+    
+    return commit_list

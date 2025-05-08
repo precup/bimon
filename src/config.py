@@ -20,6 +20,7 @@ class PrintMode(Enum):
 
 
 class Configuration:
+    SECONDARY_WORKSPACE_PATH: str = "./workspace_builds"
     WORKSPACE_PATH: str = "./workspace"
     FORCE: bool = True
 
@@ -57,9 +58,9 @@ class Configuration:
 
         # General settings
         Configuration.RANGE_START = config.get(
-			"General", "range_start")
+			"General", "default_range_start")
         Configuration.RANGE_END = config.get(
-			"General", "range_end")
+			"General", "default_range_end")
         Configuration.AUTOUPDATE_PROJECT_TITLES = config.getboolean(
             "General", "autoupdate_project_titles")
 
@@ -103,11 +104,11 @@ class Configuration:
             "Archiving", "compression_enabled")
         Configuration.EXECUTABLE_PATH = config.get(
 			"Archiving", "executable_path")
-        Configuration.ARCHIVE_PATHS = shlex.split(config.get(
-			"Archiving", "archive_paths"), posix=False)
-        Configuration.ARCHIVE_PATHS = [
+        Configuration.ARTIFACT_PATHS = shlex.split(config.get(
+			"Archiving", "artifact_paths"), posix=False)
+        Configuration.ARTIFACT_PATHS = [
             path.replace("{EXECUTABLE_PATH}", Configuration.EXECUTABLE_PATH)
-            for path in Configuration.ARCHIVE_PATHS
+            for path in Configuration.ARTIFACT_PATHS
         ]
         Configuration.COPY_ON_CACHE = config.getboolean(
             "Archiving", "copy_on_cache")
@@ -119,8 +120,8 @@ class Configuration:
             "Execution", "background_decompression_layers")
         Configuration.EXTRACTION_POOL_SIZE = config.getint(
             "Execution", "extraction_pool_size")
-        Configuration.DEFAULT_EXECUTION_PARAMETERS = config.get(
-            "Execution", "default_execution_parameters")
+        Configuration.DEFAULT_EXECUTION_ARGS = config.get(
+            "Execution", "default_execution_arguments")
         Configuration.BACKUP_EXECUTABLE_REGEX = re.compile(config.get(
             "Execution", "backup_executable_regex"))
         Configuration.AUTOPURGE_DUPLICATES = config.getboolean(

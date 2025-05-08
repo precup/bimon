@@ -25,7 +25,7 @@ class Bisector:
             self, 
             discard: bool, 
             cached_only: bool, 
-            execution_parameters: str, 
+            execution_args: str, 
             path_spec: Optional[str], 
             end_timestamp: int,
             wd: str = "",
@@ -36,7 +36,7 @@ class Bisector:
         self._path_spec = path_spec
         self._discard = discard
         self._cache_only = cached_only
-        self._execution_parameters = execution_parameters
+        self._execution_args = execution_args
 
         self._present_versions = storage.get_present_versions()
         self._ignored_commits = storage.get_ignored_commits()
@@ -98,24 +98,25 @@ class Bisector:
         temp_bads.update(new_bads)
         temp_skips.update(new_skips)
 
-        bisect_commits = self.get_bisect_commits(temp_goods, temp_bads)
+        if len(temp_goods) > 0 and len(temp_bads) > 0:
+            bisect_commits = self.get_bisect_commits(temp_goods, temp_bads)
 
-        if len(bisect_commits) == 0:
-            if not silent and self._path_spec is not None and self._path_spec != "":
-                all_bisect_commits = self.get_bisect_commits(temp_goods, temp_bads, "")
-                if len(all_bisect_commits) > 0:
-                    print("That would result in no possible remaining commits.")
-                    print("There are remaining commits that don't match your path spec, however.")
-                    response = input("Would you like to remove the path spec? [y/N]: ")
-                    if response.strip().lower().startswith("y"):
-                        bisect_commits = all_bisect_commits
-                        self._path_spec = None
-                        print("Path spec removed, continuing.")
-            
             if len(bisect_commits) == 0:
-                if not silent:
-                    print("That would result in no possible remaining commits. Ignoring.")
-                return False
+                if not silent and self._path_spec is not None and self._path_spec != "":
+                    all_bisect_commits = self.get_bisect_commits(temp_goods, temp_bads, "")
+                    if len(all_bisect_commits) > 0:
+                        print("That would result in no possible remaining commits.")
+                        print("There are remaining commits that don't match your path spec, however.")
+                        response = input("Would you like to remove the path spec? [y/N]: ")
+                        if response.strip().lower().startswith("y"):
+                            bisect_commits = all_bisect_commits
+                            self._path_spec = None
+                            print("Path spec removed, continuing.")
+                
+                if len(bisect_commits) == 0:
+                    if not silent:
+                        print("That would result in no possible remaining commits. Ignoring.")
+                    return False
 
         self._goods.difference_update(new_unmarks)
         self._bads.difference_update(new_unmarks)
@@ -393,30 +394,30 @@ class Bisector:
                 self._print_resume_sets()
 
 
-    def set_parameters_command(self, parameters: str) -> CommandResult:
-        self._execution_parameters = parameters
+    def set_arguments_command(self, arguments: str) -> CommandResult:
+        self._execution_args = arguments
         return Bisector.CommandResult.SUCCESS
 
 
     def print_status_message(self, short: bool = True) -> None:
-        remaining = set(git.get_bisect_commits(
-            good_refs=self._goods, 
-            bad_refs=self._bads, 
-            path_spec=self._path_spec, 
-            before=self._end_timestamp))
-        
-        print("There are", len(remaining), "remaining possible commits.")
         if len(self._goods) > 0 and len(self._bads) > 0:
+            remaining = set(git.get_bisect_commits(
+                good_refs=self._goods, 
+                bad_refs=self._bads, 
+                path_spec=self._path_spec, 
+                before=self._end_timestamp))
+            
+            print("There are", len(remaining), "remaining possible commits.")
             steps_left = git.get_bisect_steps_from_remaining((len(remaining)))
             steps_text = f"~{steps_left:01f} steps "
             print(steps_text + " remaining. Next commit to test:")
+
+            if self._current_commit is None:
+                print("No current commit set.")
+            else:
+                print(git.get_short_log(self._current_commit))
         else:
             print("Waiting for initial good and bad commits.")
-
-        if self._current_commit is None:
-            print("No current commit set.")
-        else:
-            print(git.get_short_log(self._current_commit))
 
         if not short and len(self._goods | self._bads | self._skips) > 0:
             print()
@@ -526,7 +527,7 @@ class Bisector:
             return Bisector.CommandResult.ERROR
         result = execution.launch_with_automation(
             self._current_commit,
-            self._execution_parameters,
+            self._execution_args,
             self._present_versions,
             self._discard,
             self._cache_only,

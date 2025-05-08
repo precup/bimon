@@ -15,7 +15,7 @@ from src.config import Configuration, PrintMode
 INVALID_NAME_CHARS = r'<>:"/\|?*'
 GITHUB_URL = "https://github.com/godotengine/godot/"
 ISSUES_URL = GITHUB_URL + "issues/"
-PULLS_URL = GITHUB_URL + "pulls/"
+PULLS_URL = GITHUB_URL + "pull/"
 
 _PROJECT_FOLDER = "projects"
 _SANDBOX_NAME = "sandbox"
@@ -87,16 +87,20 @@ def get_approx_issue_creation_time(issue: int) -> int:
     url = ISSUES_URL + str(issue)
     response = requests.get(url, timeout=60)
     soup = BeautifulSoup(response.content, "html.parser")
-    body_divs = soup.find_all("div", class_=re.compile(".*issue-body.*"))
+    body_divs = soup.find_all("div")
+    print(response.content.decode("utf-8").count("relative-time"))
     for div in body_divs:
-        date_div = div.find("relative-time")
-        if date_div is not None:
-            date_text = date_div.text.strip()
-            try:
-                issue_day = datetime.strptime(date_text[3:], "%b %d, %Y")
-                return int((issue_day + timedelta(days=2)).timestamp())
-            except ValueError:
-                pass
+        if any("issue-body" in class_name for class_name in div.attrs.get("class", [])):
+            print(f"Found issue body div: {div}")
+            date_div = div.find("relative-time")
+            print(f"Date div: {date_div}")
+            if date_div is not None:
+                date_text = date_div.text.strip()
+                try:
+                    issue_day = datetime.strptime(date_text[3:], "%b %d, %Y")
+                    return int((issue_day + timedelta(days=2)).timestamp())
+                except ValueError:
+                    pass
     return -1
 
 
@@ -164,6 +168,7 @@ def set_project_title(project_file: str, title: str, prepend_existing: bool = Fa
     with open(project_file, "r") as f:
         lines = f.readlines()
 
+    # Find existing line numbers
     title_line_index = -1
     application_line_index = -1
     version_line_index = -1
@@ -175,6 +180,7 @@ def set_project_title(project_file: str, title: str, prepend_existing: bool = Fa
         if "[application]" in line:
             application_line_index = i
 
+    # Add an initial version if we need to
     if version_line_index == -1:
         lines.insert(0, "config_version=5\n")
         version_line_index = 0
@@ -183,10 +189,12 @@ def set_project_title(project_file: str, title: str, prepend_existing: bool = Fa
         if application_line_index != -1:
             application_line_index += 1
 
+    # Add the config section if we need to
     if application_line_index == -1:
         application_line_index = len(lines)
         lines.append("[application]\n")
 
+    # Update the actual title line
     if title_line_index == -1:
         title_line_index = application_line_index + 1
         lines.insert(title_line_index, f"config/name={title}\n")
@@ -286,6 +294,7 @@ def download_project(zip_link: str, project_name: str, title: Optional[str] = No
         response = requests.get(zip_link, timeout=60)
         with open(_TEMPORARY_ZIP, "wb") as f:
             f.write(response.content)
+        print("Download complete, extracting...")
     except requests.exceptions.RequestException as e:
         print(f"Error downloading zip file: {e}")
         return False
@@ -387,21 +396,18 @@ def get_mrp(issue: int) -> str:
         else:
             return create_project()
 
+    force_create = False
     folder_name = os.path.join(_PROJECT_FOLDER, f"{issue}")
     zip_filename = os.path.join(_PROJECT_FOLDER, f"{issue}.zip")
     if os.path.exists(folder_name) or os.path.exists(zip_filename):
         print(f"Previously used MRP found for issue {issue}.")
         response = input("Would you like to use it? [Y/n]: ").strip().lower()
-        if not response.startswith("n"):
+        if response.startswith("n"):
+            force_create = True
+        else:
             if os.path.exists(folder_name):
                 project_file = find_project_file(folder_name)
-                if project_file is not None:
-                    return project_file
-                print("No project file found in the folder.")
-                response = input("Would you like to create a new one? [Y/n]: ")
-                if response.strip().lower().startswith("n"):
-                    return ""
-                return create_project_file(folder_name)
+                return project_file if project_file is not None else ""
             return zip_filename
             
     print("Attempting to find projects in the issue.")
@@ -424,9 +430,11 @@ def get_mrp(issue: int) -> str:
         
         if choice == "none":
             return ""
-        if choice == "create":
+        if choice != "create":
             zip_link = zip_links[int(choice) - 1]
-            return zip_filename if download_project(zip_link, zip_filename) else ""
+            if download_project(zip_link, str(issue)):
+                return find_project_file(get_project_path(str(issue)))
+            return ""
         
     else:
         print(f"No MRP found in issue #{issue}.")
@@ -434,7 +442,7 @@ def get_mrp(issue: int) -> str:
         if response.strip().lower().startswith("n"):
             return ""
 
-    return create_project(str(issue))
+    return create_project(str(issue), force=force_create)
 
 
 def _get_menu_choice(

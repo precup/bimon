@@ -144,6 +144,7 @@ def _print_compile_status(
     progress_bar = "Job progress (" + terminal.color_key(f"{int(fraction_done * 100):2d}%") + "): "
     progress_bar_length = cols - 4 - terminal.non_ansi_len(progress_bar)
     progress_bar += terminal.progress_bar(progress_bar_length, fraction_done)
+    print(terminal.box_content(""))
     print(terminal.box_content(progress_bar))
     print(terminal.box_content(""))
 
@@ -357,10 +358,10 @@ def compile(
     return not Configuration.COMPRESSION_ENABLED or compress(compiled_versions, retry_compress)
 
 
-def _get_paths_from_archive_paths() -> Optional[list[str]]:
+def _get_paths_from_ARTIFACT_PATHS() -> Optional[list[str]]:
     abs_workspace_path = os.path.abspath(Configuration.WORKSPACE_PATH)
     paths = []
-    for archive_path in Configuration.ARCHIVE_PATHS:
+    for archive_path in Configuration.ARTIFACT_PATHS:
         if glob.escape(archive_path) == archive_path:
             resolved_archive_path = os.path.join(Configuration.WORKSPACE_PATH, archive_path)
             if not os.path.exists(resolved_archive_path):
@@ -391,7 +392,7 @@ def cache() -> bool:
     os.makedirs(version_path, exist_ok=True)
 
     abs_workspace_path = os.path.abspath(Configuration.WORKSPACE_PATH)
-    transfers = _get_paths_from_archive_paths()
+    transfers = _get_paths_from_ARTIFACT_PATHS()
     if transfers is None:
         return False
     

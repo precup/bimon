@@ -176,6 +176,61 @@ def _get_mark_from_lines(
     return result
 
 
+def _process_process_output(process: PtyProcess, output_lines: list[str], cols: int) -> bool:
+    stdout_chunk = process.read(1024)
+    if len(stdout_chunk) == 0:
+        return False
+    
+    lines = stdout_chunk.split("\n")
+    if len(lines) == 1:
+        old_lines = split_to_display_lines(output_lines[-1], cols)
+        new_lines = split_to_display_lines(output_lines[-1] + lines[0], cols)
+        if len(old_lines) == len(new_lines):
+            output_lines[-1] += lines[0]
+            line_text = "".join(new_lines[-1][0]) + new_lines[-1][1]
+            print(ANSI_RESET + ANSI_CLEAR_LINE + line_text, end="", flush=True)
+            return False
+    output_lines[-1] += lines[0]
+    output_lines += lines[1:]
+    return True
+
+
+def _print_subwindow_lines(
+        output_lines: list[str], 
+        ansi_codes_seen: set[str], 
+        cols: int, 
+        rows: int, 
+        top: str, 
+        bottom: str,
+        prev_lines_printed: int) -> int:
+    window_lines: list[tuple[list[str], str]] = []
+    last_non_blank = -1
+    while last_non_blank >= -len(output_lines) and output_lines[last_non_blank].strip() == "":
+        last_non_blank -= 1
+    for line in output_lines[last_non_blank::-1]:
+        split_lines = split_to_display_lines(line, cols)
+        if len(split_lines) > rows - len(window_lines):
+            if rows > len(window_lines):
+                window_lines = split_lines[:rows - len(window_lines)] + window_lines
+            break
+        window_lines = split_lines + window_lines
+
+    lines_printed = max(1, len(window_lines))
+    center = "\n".join(
+        ANSI_CLEAR_LINE + "".join(ansi_stack) + line_text 
+        for ansi_stack, line_text in window_lines
+    )
+    ansi_codes_seen.update({match.group() for match in _ANSI_ESCAPE.finditer(center)})
+    output = (
+        (f"\033[{prev_lines_printed}A\r" if prev_lines_printed > 0 else "") 
+        + ANSI_RESET + top + "\n" 
+        + center + ANSI_RESET + "\n" 
+        + bottom + "\r\033[1A"
+    )
+    print(output, end="", flush=True)
+    return lines_printed
+
+
 def _execute_in_subwindow_pty(
         command: list[str], 
         title: str, 
@@ -191,6 +246,7 @@ def _execute_in_subwindow_pty(
     process = PtyProcess.spawn(command, cwd=cwd)
     cols = get_cols()
     output_lines = [""]
+
     lines_printed = 0
     top = box_top(bold=False, title=title)
     bottom = box_bottom(bold=False, title=signal_handler.status())
@@ -199,23 +255,14 @@ def _execute_in_subwindow_pty(
     already_soft_killed = False
 
     mark: Optional[str] = None
+    automation_on = (
+        automate_good is not None or automate_good_regex is not None or
+        automate_bad is not None or automate_bad_regex is not None
+    )
     while process.isalive():
         try:
-            stdout_chunk = process.read(1024)
-            if len(stdout_chunk) > 0:
-                lines = stdout_chunk.split("\n")
-                if len(lines) == 1:
-                    old_lines = split_to_display_lines(output_lines[-1], cols)
-                    new_lines = split_to_display_lines(output_lines[-1] + lines[0], cols)
-                    if len(old_lines) == len(new_lines):
-                        output_lines[-1] += lines[0]
-                        line_text = "".join(new_lines[-1][0]) + new_lines[-1][1]
-                        print(ANSI_RESET + ANSI_CLEAR_LINE + line_text, end="")
-                        sys.stdout.flush()
-                        continue
-                output_lines[-1] += lines[0]
-                output_lines += lines[1:]
-                if mark is None:
+            if _process_process_output(process, output_lines, cols):
+                if mark is None and automation_on:
                     mark = _get_mark_from_lines(
                         output_lines,
                         automate_good,
@@ -229,46 +276,20 @@ def _execute_in_subwindow_pty(
                 continue
         except EOFError:
             break
-        
-        window_lines: list[tuple[list[str], str]] = []
-        last_non_blank = -1
-        while last_non_blank >= -len(output_lines) and output_lines[last_non_blank].strip() == "":
-            last_non_blank -= 1
-        for line in output_lines[last_non_blank::-1]:
-            split_lines = split_to_display_lines(line, cols)
-            if len(split_lines) > rows - len(window_lines):
-                if rows > len(window_lines):
-                    window_lines = split_lines[:rows - len(window_lines)] + window_lines
-                break
-            window_lines = split_lines + window_lines
 
         if signal_handler.soft_killed() and not already_soft_killed:
             if eat_kill:
                 signal_handler.clear()
                 process.kill(signal.SIGINT)
+                print(move_rows_up(1), end="\r", flush=True)
             elif not signal_handler.hard_killed():
                 already_soft_killed = True
                 bottom = box_bottom(bold=False, title=signal_handler.status())
-                print(move_rows_up(1), end="\r")
-                sys.stdout.flush()
+                print(move_rows_up(1), end="\r", flush=True)
             else:
                 print()
-
-        prev_lines_printed = lines_printed
-        lines_printed = max(1, len(window_lines))
-        center = "\n".join(
-            ANSI_CLEAR_LINE + "".join(ansi_stack) + line_text 
-            for ansi_stack, line_text in window_lines
-        )
-        ansi_codes_seen.update({match.group() for match in _ANSI_ESCAPE.finditer(center)})
-        output = (
-            (f"\033[{prev_lines_printed}A\r" if prev_lines_printed > 0 else "") 
-            + ANSI_RESET + top + "\n" 
-            + center + ANSI_RESET + "\n" 
-            + bottom + "\r\033[1A"
-        )
-        print(output, end="")
-        sys.stdout.flush()
+        
+        _print_subwindow_lines(output_lines, ansi_codes_seen, cols, rows, top, bottom, lines_printed)
 
     process.wait()
     if lines_printed > 0:
@@ -329,16 +350,35 @@ def execute_in_subwindow_with_automation(
             automate_bad_regex,
             automate_crash,
             automate_exit)
-    
-    elif Configuration.PRINT_MODE == PrintMode.QUIET:
-        stdout = subprocess.DEVNULL
-        stderr = subprocess.DEVNULL
     else:
-        if Configuration.PRINT_MODE != PrintMode.VERBOSE:
-            print(f"Internal error: unknown print mode {Configuration.PRINT_MODE}."
-                  + " Falling back to VERBOSE.")
+        return _execute_directly(
+            command,
+            cwd,
+            automate_good,
+            automate_good_regex,
+            automate_bad,
+            automate_bad_regex,
+            automate_crash,
+            automate_exit,
+            Configuration.PRINT_MODE == PrintMode.VERBOSE)
+
+
+def _execute_directly(
+        command: list[str],
+        cwd: Optional[str],
+        automate_good: Optional[str],
+        automate_good_regex: Optional[re.Pattern],
+        automate_bad: Optional[str],
+        automate_bad_regex: Optional[re.Pattern],
+        automate_crash: Optional[str],
+        automate_exit: Optional[str],
+        verbose: bool) -> str:
+    if verbose:
         stdout = sys.stdout
         stderr = sys.stderr
+    else:
+        stdout = subprocess.DEVNULL
+        stderr = subprocess.DEVNULL
     
     process_output = False
     if (automate_good is not None or automate_good_regex is not None or 
@@ -360,8 +400,7 @@ def execute_in_subwindow_with_automation(
         try:
             for line in iter(process.stdout.readline, ""):
                 if Configuration.PRINT_MODE != PrintMode.QUIET:
-                    sys.stdout.write(line)
-                    sys.stdout.flush()
+                    print(line, end="", flush=True)
                 output.append(line)
                 mark = _get_mark_from_lines(
                     output,

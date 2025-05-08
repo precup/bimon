@@ -5,6 +5,7 @@
 versions
 projects
 workspace
+workspace_builds
 
 # BiMon internal state
 state/bundle_map

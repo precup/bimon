@@ -1,176 +1,251 @@
-# Godot BiMon
-BiMon is a tool for speeding up bug triage for the Godot engine bugsquad. It has some nice convenience features, but the main focus is its ability to precompile and cache godot binaries for use in later bisects.
+# BiMon
+BiMon is a tool for speeding up bug triage for the Godot engine bugsquad. It has some nice convenience features, but the main focus is its ability to precompile and cache Godot binaries for use in later bisects.
 
-Compiling repeatedly during bisection is inefficient even on a fairly beefy computer. Even after optimizing my build time as much as I could, it still takes about 2 minutes for clean build. Bisecting from 4.4-stable to 4.5-dev1 takes about 10 bisections, which meant that bisecting a single bug involved about 15 minutes of just waiting on compiles. 
-
-For many bugs, actually checking whether a commit is good or bad once the project is built takes a matter of seconds, and so even if compilation were 10x faster than on my machine it would still be a relatively large slowdown in the workflow.
+Compiling repeatedly during bisection is inefficient even on a fairly beefy computer. For many bugs, actually checking whether a commit is good or bad once the project is built takes a matter of seconds, and so even if compilation were 10x faster than on my machine it would still be a large fraction of the time spent.
 
 The answer is straightforward: precompile commits when you're not bisecting so you can skip that time when you are.
 
 ### How many commits get precompiled?
-You can precompile every 1 in N commits or simply every commit across whatever ranges you choose. You can also mix and match the two as you like.
-I initially did a 1 in 128 pass to cut down the number of compiles a bit and then did a full pass from 4.5-dev1 back to 4.0-stable. The first pass produced ~120 versions, the second ~20,000 versions.
+You can precompile 1 in every N commits (or every commit) across whatever ranges you choose. You can also mix and match the two as you like.
+I initially did a 1 in 128 pass to cut down the number of compiles a bit and then did a full pass from 4.5-dev1 back to 4.0-stable. The first pass produced ~120 versions, the second ~20,000 versions. Doing a hybrid where you do 1 in N for a longer time range and every commit for the last version or so also works well; I did that on a second machine.
 
 ### What's the performance like?
-Probably better than you expect. 
+**TL;DR: I'm averaging 37 seconds and 7.8 MB per version.** A clean build with no flags takes 9 minutes for me, for reference.
 
-To cover everything from 4.0-stable to 4.5-dev1 (the present at time of writing), you need 20,000 versions. Compiling and storing 20,000 versions of godot seems a bit ludicrous at first glance. However, there are a couple things working in our favor:
+I wanted to be able to cover everything back to the last major release, which at the moment is 20,000 versions. If you're more reasonable and only go back to the previous minor version, this won't be as much of a concern.
+
+ Compiling and storing 20,000 versions of Godot seems a bit ludicrous at first glance. However, there are a couple things working in our favor:
 - Very similar commits build very quickly
-- Godot binaries have large amounts of overlap and compress well when stored with each other, especially if they're for similar commits
+- Very similar commits have a lot of overlap that compresses extremely well
 
-When I first started looking into this, my clean builds were taking 10 minutes. The current official Linux build is compressed to about 58 MB by itself. Multiplying those by 20k gives you 140 days and 1.2 TB, basically unacceptable numbers. 
+When I first started looking into this, my clean builds were taking 9 minutes. The current official Linux build is compressed to about 58 MB. Multiplying those by 20k gives you 140 days and 1.2 TB, neither of which are acceptable. 
 
-After optimizing my build, my clean build takes 2 minutes, my incremental builds average 45 seconds, and the binaries compress to an average of 13 MB each. Multiplying those by 20k gives you 10 days and 260 GB, large but not unmanageable numbers.
+However, reality is much kinder, for once. With the right flags and incremental builds, I'm averaging 37 seconds and 7.8 MB per version. Multiplying those by 20k gives you 9 days and 160 GB, which is good enough to be usable. Extraction times are ~2 seconds on my machine, a little slow but not awful.
 
-My initial 1 in 128 pass from 4.0-stable to 4.5-dev1 took about 6 hours and dropped the average number of compiles from 14 to 7. I chose 128 for N since it was around sqrt(20k).
+1 in N passes have significantly worse performance on both speed and size because the commits are less similar, so it's hard to justify for small N (<= 8) compared to just compiling everything.
 
-### Bisecting with BiMon
-Once you have your commits prebuilt, BiMon manages your actual bisections for you by wrapping around git. While you're testing a revision, BiMon determines which versions could be needed next and begins to extract them from the archives to hide the decompression time. Once you've told BiMon whether the tested version was good or bad, it launches the project you're testing in the next version automatically. Since switching back to the terminal after each test is a small inefficiency, global hotkeys are also supported if you're willing to run the script as root. Hitting Ctrl+B or Ctrl+G for bad and good while bisecting will automatically close the launched editor, mark the commit, launch the next appropriate version, and begin decompressing the versions after that. Without root these shortcuts still work, but only when the terminal is in focus.
+### What else does it do?
+Once you have your commits prebuilt, BiMon manages your actual bisections for you by wrapping around git. The interactive bisect mode handles extracting and launching cached commits for you and prioritizes those to narrow down the range as much as possible first. When versions do need to be compiled, it also handles that for you. This is a very similar process to bisecting with git normally, but with a lot more automation around building and running Godot. There are also options that can be used to automate bisection by marking commits automatically if they print certain output or crash.
 
-### Integrating with `git bisect run` workflows
-If you've got a fancy `git bisect run` based workflow, you can have it retrieve the binary from BiMon by running `bimon.py extract COMMIT DESTINATION_FILEPATH` in your script. It will exit 2 if it doesn't have that commit on hand.
+BiMon also supports running individual versions if you're just trying to reproduce a bug instead of bisect it. 
 
-### Requirements
-- Time. Compiling all the commits you want up front will take a long time. If you want to compile 20k commits, take your clean build time in minutes and multiply it by 2. It'll take roughly that many *days* to finish. 
-- Space. It'll take about 13 GB per 1k commits in the range you want to cover. 4.0 to 4.4 is about 260 GB.
-- This was made for Linux. If you want it on other platforms, PRs are welcome.
-- A reasonably recent version of git on your PATH
+> [!TIP]
+> There are project management features built in, so you can just run `bimon.py run 1d33a9bc1 106106` and it will download the project zip off the GitHub page for issue #106106 and launch commit `1d33a9bc1` of Godot, compiling if needed.
+
+## Requirements
 - Python 3.12+
+- A virtualenv with the packages from `requirements.txt`
+- A somewhat recent `git` on your `PATH`
+- Time. Expect this to take on the order of days to run for large jobs.
+- Space. Depending on mode and compiler flags, I'd expect between 5 and 20 MB per version; I've been getting ~8 MB.
+> [!WARNING]
+> I only have a Linux and Windows machine. This is heavily used on Linux, lightly tested on Windows, and a mystery on Mac. It *should* work, though?
 
-### Setup
-1) Check out a new copy of the `godotengine/godot` repo in a location outside the BiMon folder since they have separate git setups. This will be called your workspace folder. Using a dedicated clone of godot instead of reusing the one you do dev work on is strongly recommended.
-2) Optimize the builds in your workspace folder. See "Optimizing your builds" below for information on how to do so.
-3) In the BiMon folder, copy `default_config.py` to `config.py` and then open `config.py` in your editor of choice. There are a variety of options present that are commented with descriptions and instructions.
-4) Run `bimon.py update` to begin the long process of compiling all your versions. This is safe to stop or force quit at any point and running it again later will continue the process, although it may waste a bit of progress. If it's killed while performing certain operations, it may litter the workspace folder with changes and refuse to run to avoid overwriting real changes. In that case, running with `-f` will discard any changes and get you back on your way.
-5) Wait a while for your compiles to be done.
-6) Add `bimon.py update -f` to your task scheduler of choice so it executes once a day overnight. This is all you need to do to keep the version cache up to date as Godot is developed.
+    cp default_(linux/windows/macos)_config.ini config.ini
+    # Edit config.ini as desired
 
-### Optimizing your builds
-Out of the box, compiling Godot is a long and slow process. I was getting about 10 minute clean compiles. At that pace, 20k commits would take about 35 days. That's not completely unreasonable, and since it works backwards from HEAD and you can still bisect the most recent regressions before it's done, but you can do better. [This page](https://docs.godotengine.org/en/latest/contributing/development/compiling/compiling_for_linuxbsd.html) has instructions you should follow. The clang, mold, and system libraries were all helpful. The system libraries also reduce the storage required.
+    python bimon.py init -y
 
-BiMon runs with `dev_build=no optimize=none scu_build=yes`. `dev_build=no` should be on to reduce sizes since the symbol table isn't needed. `optimize=none` is then needed to speed the builds back up. `scu_build=yes` is just a massive time savings.
+    python bimon.py
+## Setup
+1) Clone the BiMon repository and set up a virtualenv:
+```
+git clone https://github.com/precup/bimon.git bimon
+cd bimon
+python -m venv venv
+```
+2) Install python dependencies
+```
+# Linux/MacOS
+source venv/bin/activate
+# Windows
+venv\Scripts\activate
 
-8df2dbe2f6e95852c858d6831fa8e8ef04455f4a is an example of a bad builtin_miniupnpc=no commit. Had to skip embree because distro as well.
+pip install -r requirements.txt
+```
+3) Copy the config file that matches your OS to `config.ini` and edit it as desired
+```
+# Linux
+cp default_linux_config.ini config.ini
+# MacOS
+cp default_macos_config.ini config.ini
+# Windows
+copy default_windows_config.ini config.ini
 
-TODO this section sucks
+# Take a look at config.ini!
+```
+4) Run some initial configuration and setup checks
+```
+python bimon.py init -y
+```
+5) You're ready to go! You can perform some initial precompiles, and then keep them up to date by running it via a scheduler.
+```
+python bimon.py update # + whatever args you'd like
+```
 
-### Running BiMon
-Before executing BiMon you'll need to `source venv/bin/activate`. Then, you can run it with `./bimon.py [-q] [-v] [-l] COMMAND [COMMAND_ARG...]`.
+# Commands
+To run BiMon, use `./bimon.py [-q/-v/-l] [--color=yes/no] [--config=FILE] [-i] COMMAND [COMMAND_ARG...]`.
 
-Porcelain commands:
-- `update [-f/--force] [-n N] [CUT_REV]` - Fetch, compile, and cache missing commits, working back from `CUT_REV` until it hits config.py's `START_REV`. `CUT_REV` defaults to the latest commit. If `-f` is provided, uncommitted changes in the workspace directory will be discarded instead of preventing the update. If `-n` is provided, only 1 in every `N` commits will be compiled and cached.
-- `bisect [-d/--discard] [-c/--cached-only] [PROJECT]` - Bisect history to find a regression's commit. Enters an interactive mode detailed below. `PROJECT` may be the root folder of the project or the path of a `project.godot` file. If no project is provided, the Project Manager will be launched.
-- `extract REV [FILE_PATH]` - Extracts the binary for the commit for the provided revision name `REV` to `FILE_PATH`. If `FILE_PATH` is not provided, the commit SHA is used instead. Exits 2 if that commit isn't present in the cache.
-- `clean` - Delete any uncompressed binaries that are also present in compressed form. These may have been littered around if BiMon encounters an error or is forced to close while working, or the `extract` command is used.
-- `help` - Show this info.
+### Main commands:
+- `init` - Sets up the workspaces needed and performs some initial configuration checks.
+    - `-y`: Don't ask for permission to clone repositories.
 
-Plumbing commands (usually handled by `update`):
-- `fetch` - Fetch the latest commits and update the processing lists.
-- `compile [REV]` - Compile and store a specific revision `REV`. `REV` defaults to `HEAD`.
-- `compress [-n N] ` - Pack completed bundles. If `-n` is provided, bundles will be packed even if they have gaps of up to size N - 1.
+- `update` - Fetches, compiles, and caches missing commits.
+    - `--range UPDATE_RANGE`: The range(s) to process. Defaults to the values in the config file.
+    - `-n N`: Only process 1 in every N commits, roughly evenly spaced
+    - `CURSOR_REF`: The ref to start compiling from. The order after that is based on diff sizes and cannot be configured.
 
-Print Flags:
-All commands accept the `-q`/`--quiet`, `-l`/`--live`, and `-v`/`--verbose` flags, which are mutually exclusive and specify the print mode.
-- Quiet mode hides any output from long running subprocesses, like scons. 
+- `run` - Runs the requested version of Godot.
+    - `--project PROJECT`: The project to use as a working directory when launching Godot
+    - `--issue ISSUE`: The issue number or link to reproduce. Looks for associated projects locally and on the issue page.
+    - `--ref/--commit/--pr REF`: The version of Godot to run. May also be a PR number or link. All three are aliases of each other.
+    - `--execution-params PARAMS`: The arguments to pass to the Godot executable. Defaults to the value in the config file.
+    - `--discard`: Don't store the result of any builds that occur
+    - `FLEXIBLE_ARGS...`: Accepts anything `--project`, `--issue`, and `--ref` does and figures out which is which
+
+- `bisect` - Bisects history to find a regression's commit. Enters an interactive mode detailed below.
+    - `--project PROJECT`: The project to use as a working directory when launching Godot
+    - `--issue ISSUE`: The issue number or link to reproduce. Looks for associated projects locally and on the issue page.
+    - `--range GOOD_REF..BAD_REF`: The initial commits used to calculate a bisect
+    - `--execution-params PARAMS`: The arguments to pass to the Godot executable. Defaults to the value in the config file.
+    - `--discard`: Don't store the result of any builds that occur
+    - `--cached-only`: Only bisect using precompiled versions, stopping when compiles would be required
+    - `--ignore-date`: If an issue is provided, its timestamp is used to roughly bound the bisect range. This disables that behavior.
+    - `--path-spec`: Limits the search to commits containing certain files. See `git bisect`'s documentation on `path-spec` for full details.
+    - `FLEXIBLE_ARGS...`: Accepts anything `--project`, `--issue`, and `--range` does and figures out which is which
+
+- `create` - Creates a new project in the `projects` folder to be used with `run` and `bisect`.
+    - `--title TITLE`: The initial title for the project
+    - `NAME`: The name to refer to this project by for other commands
+
+- `export NAME ZIP` - Exports a project from the `projects` folder to a zip for uploading.
+    - `--title TITLE`: Overwrite the project title with `TITLE` on the exported project
+    - `NAME`: The project name to export
+    - `ZIP`: The destination path to export to
+
+- `clean` - Offers a variety of ways to clean up potentially wasted space.
+    - `--duplicates`: Delete uncompressed versions that are duplicates of compressed versions
+    - `--build-artifacts`: Delete build files with `scons --clean`
+    - `--caches`: Delete internal caches, mostly stored git information
+    - `--temp-files`: Delete temporary files used during processing
+    - `--projects`: Delete all projects. Use with caution.
+    - `--loose-files`: Delete any unrecognized files in the versions directory. Use with caution.
+    - `--dry-run`: Prints information about what would be deleted but does nothing. Use without caution.
+
+- `help [COMMAND]` - Shows detailed help.
+    - `COMMAND`: Only show info on commands beginning with `COMMAND`
+
+### Plumbing commands (usually handled by other commands):
+- `compile REF_OR_RANGE...` - Compile and store specific commits. Very similar to `update`.
+    - `REF_OR_RANGE`: The refs, ranges, or PRs to be compiled. If none are provided, uses the workspace `HEAD`.
+
+- `compress` - Packs uncompressed versions into compressed bundles.
+    - `--all`: Force all versions to be compressed even if it creates undersized or poorly optimized bundles
+
+- `extract REF [FOLDER]` - Extracts the build artifacts for the requested version to a location of your choice.
+    - `REF`: The version to extract the build artifacts for
+    - `FOLDER`: The target output folder for the files to be extracted into. Defaults to `versions/COMMIT_SHA`.
+
+> [!TIPS]
+> - Any unique prefix of a command is also accepted, as with flags. 
+> - Commands that accept a "ref" may be passed any git reference that resolves to a single commit, such as a branch or tag.
+> - Commands that accept a range use the format `START_REF..END_REF`. If either is omitted, that side of the range is unbounded. Ranges are inclusive unless bisecting.
+> - Commands that accept a project can take a project name, a directory, `project.godot` filepath, `.zip` filepath, or link to a `.zip`. 
+> - If no project is provided but an issue is, the issue page will be scanned for projects to use. Project names are either the value passed to `create` or the issue number if downloaded via issue number.
+> - `run` can accept PR numbers in place of a commit. The PR will be end up in a branch named something like `pr-104224`.
+> - PR and issue numbers don't overlap, so you don't need to clarify which is which.
+> - Projects are just folders in the `projects` directory, it's safe to delete them yourself or add your own through other means. The project name is just the folder name.
+> - Unstable builds (such as `4.5-dev1`) are automatically added as tags on the main workspace.
+
+### Print flags:
+The `-q`/`--quiet`, `-l`/`--live`, and `-v`/`--verbose` flags may be provided before the command; they are mutually exclusive and specify the print mode.
+- Live mode shows a live updating display of the tail of long running subprocesses, like scons. 
+- Quiet mode hides any output from those subprocesses. 
 - Verbose mode prints the output from those subprocesses.
-- Live mode shows a live updating display of the tail of those subprocesses. 
 
-If no print mode is specified, live mode is used for TTYs and verbose mode is used otherwise.
+If no print mode is specified, live mode is used for TTYs and verbose mode is used otherwise. If you have issues with subprocesses, use something other than live mode.
 
+### Compiler errors
+If a commit has compile errors but several successful other compiles have occurred, BiMon will assume there's something wrong with the commit itself and add it to the `compile_error_commits` file. These commits will be skipped for most purposes in the future unless specifically requested or the `-i`/`--ignore-old-errors` flag is provided.
 
-### Using `bisect`
-When you run the `bisect` command, the program will enter an interactive mode. At the prompt you can type the following commands. Only the first letter is necessary.
-- `good`, `bad`, and `skip` mark revisions as good, bad, or skipped. Arguments can be provided to specify a rev, like `g 4.2-stable`. Multiple of these options can be mixed on one line, like `g 4.0-stable 3.6-stable b 4.1-stable g 4.1-dev1`. If no arguments are provided, the current revision is used. The no argument versions are not valid commands until after `start` has been called.
-- `start` begins the bisection process, repeatedly opening editors until the regression is found.
-- `try REV` switches the current revision to `REV` and launches it for testing.
-- `retry` relaunches the editor for the current revision in case you closed it or got it into a bad state.
-- `list` prints out a list of all the commits that could still contain the regression.
-- `visualize` displays the result of running `git bisect visualize` and accepts the same options.
-- `help` displays this list.
-- `exit` or `quit` exits bisection and prints a safe commit range to continue bisecting with later.
+If you want commits to be ignored for even more purposes, you can also create a file named `ignored_commits` and add the SHAs to it with one per line.
 
-Bisection proceeds in two phases, where the range is first narrowed down as much as possible using cached builds, and then that range is bisected by actually compiling and caching the commits. When the bisect is started, the `-d`/`--discard` and `-c`/`--cached-only` flags may be passed to alter this behavior. Passing `--discard` prevents caching the binaries compiled in phase two and is useful if you're limited on storage.
-Passing `--cached-only` prevents the second phase entirely and prevents ever compiling during a bisect.  
+# Using `bisect`
+When you run the `bisect` command, the program will enter an interactive mode. At the prompt you can use the following commands:
+- `good/bad/skip/unmark [REF...]` - Marks (or removes marks) from commits and then updates the current commit.
+    - `REF`: The commits to mark or unmark. If not provided, uses the current commit.
+- `automate` - Starts opening commits automatically with options to help mark commit automatically, as well.
+    - `--good GOOD_STR`: If this text is printed during execution, mark the commit as good
+    - `--bad BAD_STR`: If this text is printed during execution, mark the commit as bad
+    - `--crash good/bad/skip`: What to mark commits that crash during execution
+    - `--exit good/bad/skip`: What to mark commits that exit normally
+    - `--regex`: If provided, `--good` and `--bad` are treated as regexes
+    - `--script SCRIPT_PATH`: Run this script instead of the executable, passing it the executable location and args
+- `pause` - Stops automatically opening commits; other automation remains active.
+- `exit/quit` - Exits the interactive bisect and prints a final status message.
+- `run [REF...]` - Runs the given commits in order.
+    - `REF`: The version to run. If not provided, defaults to the current commit.
+- `list` - Lists all remaining possible commits.
+    - `--short`: Print only shortened commit SHAs and no log information
+- `status` - Prints summary information about the current bisect.
+    - `--short`: Print only the primary status information
+- `set-params EXECUTION_PARAMETERS` - Updates the parameters Godot will be run with.
+    - `EXECUTION_PARAMETERS`: The parameters to run Godot with
+- `help [COMMAND]` - Shows detailed help.
+    - `COMMAND`: Only show info on commands beginning with `COMMAND`
 
-The intended workflow to bisect an issue is to get an MRP, run `bimon.py bisect MRP_PATH`, enter any versions listed in the issue using `good` or `bad`, and then run `start`.
+Bisection proceeds in two phases, where the range is first narrowed down as much as possible using cached builds, and then that range is bisected by actually compiling and caching the commits.
 
-Once the editor opens, 
-you should attempt to reproduce the bug. Then, either hit the MARK_GOOD or MARK_BAD hotkeys or switch back to your terminal and submit `g` or `b`. Repeat with each new editor that opens. 
+> [!TIPS]
+> - `good`, `bad`, `skip`, and `unmark` can be combined on the same line (`g 4.4-dev1 b 4.5-stable`)
+> - `automate` with no arguments is still useful since you won't need to use `run` anymore
+> - You can use the other flags of `automate` to mark commits using `--script`
+> - `automate` calls overwrite each other
 
-### TODO
+## TODO
+20 - Total
+    5 Output
+    - 4 Better output, colors, text decorations?
+    - 1 use merge base for tag buckets
 
-3 Clean up
-- Better output, colors, text decorations?
-- progress bar feels a bit cluttered
-- ctrl C terminal left me on the box end line during editor launched
+    13 Misc
+    - 4 LIVE mode can get stuck on Windows
+    - 4 bisect functionality is broken
+    - 4 Code function level clean up pass - 969
+        git - 280
+            I hate the cache functions
+            why are there no newlines anywhere
+            line 280 upwards
+        bisect - 689
+            like the whole file
+    - 1 bisect startup is like 3 seconds??
+
+    2 Documentation
+    - 2 Add 
+        descriptions
+        usages
+
 
 Testing!!!
+    terminal.py non live mode mypy errors
 
-mypy
-  terminal.py non live mode errors
-
-11 Finishing touches
-- 1 revisit command names
-    set-params
-    repro
-- 1 revisit single character arg support and defaults
-- 1 src/commands.py:234:                # TODO the help message on this is awful formatting wise
-- 1 asks twice before overwriting a project that already exists with a new blank one
-- 1 should be able to resolve 4.5-dev1 tags
-- 1 lag during bisect sucks, especially inputting initial revs
-
-- 8 Code function level clean up pass - 969 + 573 + 545 = 2087 
-    git - 280
-        I hate the cache functions
-        why are there no newlines anywhere
-        line 280 upwards
-    bisect - 689
-        like the whole file
-
-    config - 129
-        think about config names
-    parsers - 444
-        extract common argument descriptions
-
-    terminal - 220
-        execute_in_subwindow_with_automation
-        _execute_in_subwindow_pty
-    project_manager - 45
-        set_project_title
-    commands - 280
-        _parse_flexible_args is digusting
-        update_command
-        repro_command commit handling
-
-2 Last things
+4 Last things
 - 1 make precache file
 - 1 trailing whitespace
+- 1 update other platform config files
+- 1 look over TODOs
 
-7 Documentation
-- Write README.md
-- defaults don't show up properly in help
-- Update argparser help strings
-- Add descriptions/epilogs/usage strings
-- Update config files
-- Ordering in help
-
-nits
-    circular import TODO
-
-Known Issues
-- Multiple instances running at once may cause problems
-- `scons` is sometimes faster after a clean, not sure why. Clean automatically?
-- Corrupted binaries aren't handled at all
-    - Does killing the extraction threads litter the version space?
+#### Known Issues
+- Occassionally gets stuck when running a subprocess in live mode on Windows, proceeds after any input
+- Multiple instances running at once is not safe
+- Corrupted build artifacts/extractions aren't handled at all
+- Killing the extraction threads might litter the version space, hasn't been a problem *yet*
 - SIGINT doesn't print if triggered in the middle of another print
 - Minor formatting issues on SIGINT while in live mode
 
-Maybe Someday
+#### Maybe Someday
 - Non interactive bisect mode
-- Hotkeys
-- Make more general so this isn't just a godot specific tool
-- Fullscreen update mode
-- Terminal window resizing support
-- Find commits mentioned in the issue
+- Make more general so this isn't just a Godot specific tool
+- Sentinel usage cleanup/function cleanup pass
+- Switch path-spec to being input with -- like git
 - Lifetime stats :D
-- Empty string usage cleanup/cleanup pass

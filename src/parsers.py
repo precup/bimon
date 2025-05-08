@@ -8,7 +8,7 @@ from src.config import PrintMode
 
 
 _BIMON_COMMANDS = [
-    "init", "update", "repro", "bisect",
+    "init", "update", "run", "bisect",
     "compile", "compress", "extract", 
     "create", "export", 
     "clean", "help",
@@ -16,7 +16,7 @@ _BIMON_COMMANDS = [
 ]
 _BISECT_COMMANDS = [
     "good", "bad", "skip", "unmark", 
-    "set-params", "run", "automate", "pause",
+    "set-arguments", "run", "automate", "pause",
     "list", "status", "help", "exit", "quit", 
 ]
 _HIDDEN_COMMANDS = {"write-precache"}
@@ -34,8 +34,8 @@ def get_bimon_parser() -> ArgumentParser:
             "Show this help message and exit.")
         help_messages.append((command, parser.format_usage(), parser.format_help()))
 
-    parser = ArgumentParser(description=
-        "BiMon: A tool for speeding up bug triage, mostly during bisecting.",
+    parser = ArgumentParser(
+        description="BiMon: A tool for speeding up bug triage, mostly during bisecting.",
         epilog="For detailed information on a command, run \"bimon.py <command> --help\".\n\n",
         usage="bimon.py [-h] [-q/v/l] [--color [yes/no]] [--config PATH] [-i] command ...",
         add_help=False)
@@ -65,11 +65,12 @@ def get_bimon_parser() -> ArgumentParser:
     # Porcelain commands
     init_parser = subparsers.add_parser("init",
         help="Initializes the workspace and runs some basic checks.",
-        description="This command ensures that the workspace is set up correctly and not"
-        + " much else. Running it on first set up will help make sure everything is in order.",
+        description=("This command ensures that the workspaces are cloned and does a few basic checks."
+            + " Running it on first set up is recommended."),
+        usage="bimon.py init [-y]",
         add_help=False)
     init_parser.add_argument("-y", action="store_true", help=
-        "Don't ask for confirmation before setting up the workspace.")
+        "Don't ask for confirmation before cloning repositories.")
     add_messages("init", init_parser)
     init_parser.set_defaults(func=lambda _: 
         commands.init_command())
@@ -78,6 +79,7 @@ def get_bimon_parser() -> ArgumentParser:
         help="Fetch, compile, and cache missing commits.",
         description="This command compiles and caches any commits that are missing from the" 
         + " specified or configured ranges. Fetches from the remote repository before running.",
+        usage="bimon.py update [-r START_REF..END_REF]... [-n N] [CURSOR_REF]",
         add_help=False)
     update_parser.add_argument("-r", "--range", type=str, action="append", help=
         "The commit range(s) to compile, format \"start..end\"."
@@ -90,47 +92,40 @@ def get_bimon_parser() -> ArgumentParser:
     update_parser.set_defaults(func=lambda args: 
         commands.update_command(args.n, args.cursor_ref, args.range))
 
-    create_parser = subparsers.add_parser("create", help=
-        "Creates a new project.",
-        add_help=False)
-    create_parser.add_argument("-t", "--title", type=str, help=
-        "The title to add to the project file.")
-    create_parser.add_argument("name", help=
-        "The name of the project to create.")
-    add_messages("create", create_parser)
-    create_parser.set_defaults(func=lambda args: 
-        commands.create_command(args.name, args.title))
-
-    repro_parser = subparsers.add_parser("repro", help=
-        "Try to reproduce an issue with some convenience options.",
+    run_parser = subparsers.add_parser("run",
+        help="Runs godot with some convenience features to help reproduce issues.",
+        description="",
+        usage="bimon.py run [-p PROJECT] [-i ISSUE] [-r COMMIT] [-e EXECUTION_ARGS] [-d] [FLEXIBLE_ARGS]...",
         add_help=False)
     project_flag_description = (
         "The project to use for testing."
         + " Can be a project name, directory, project.godot, zip file, or link.")
-    repro_parser.add_argument("-p", "--project", type=str, help=
+    run_parser.add_argument("-p", "--project", type=str, help=
         project_flag_description)
-    repro_parser.add_argument("-i", "--issue", type=str, help=
-        "The issue number or URL to try reproducing.")
-    repro_parser.add_argument("-r", "--ref", "--commit", "--pr", type=str, help=
+    run_parser.add_argument("-i", "--issue", type=str, help=
+        "The issue number or URL to try reproducing. Scans for MRPs.")
+    run_parser.add_argument("-r", "--ref", "--commit", "--pr", type=str, help=
         "The commit to test with. Also accepts git references or PRs.")
-    repro_parser.add_argument("-e", "--execution-parameters", type=str, help=
-        "The parameters to pass to the executable. See the config.ini comments for details.")
-    repro_parser.add_argument("-d", "--discard", action="store_true", help=
+    run_parser.add_argument("-e", "--execution-arguments", type=str, help=
+        "The arguments to pass to the executable. See the config.ini comments for details.")
+    run_parser.add_argument("-d", "--discard", action="store_true", help=
         "Prevents caching anything that gets compiled.")
-    repro_parser.add_argument("flexible_args", nargs="*", help=
-        "Accepts the same things as project, issue, and -r. Autodetects which is which.")
-    add_messages("repro", repro_parser)
-    repro_parser.set_defaults(func=lambda args: 
-        commands.repro_command(
-            execution_parameters=args.execution_parameters, 
+    run_parser.add_argument("flexible_args", nargs="*", help=
+        "Accepts the same things as -p, -i, and -r. Autodetects which is which.")
+    add_messages("run", run_parser)
+    run_parser.set_defaults(func=lambda args: 
+        commands.run_command(
+            execution_args=args.execution_args, 
             discard=args.discard,
             issue=args.issue, 
             project=args.project, 
             ref=args.ref,
             flexible_args=args.flexible_args))
 
-    bisect_parser = subparsers.add_parser("bisect", help=
-        "Bisect history to find a regression's commit via an interactive mode.",
+    bisect_parser = subparsers.add_parser("bisect",
+        help="Bisect history to find a regression's commit via an interactive mode.",
+        description="",
+        usage="bimon.py bisect [-p PROJECT] [-i ISSUE] [-r GOOD_REF..BAD_REF] [-e EXECUTION_ARGS] [-d] [--cached-only] [--path-spec SPEC] [FLEXIBLE_ARGS]...",
         add_help=False)
     bisect_parser.add_argument("-p", "--project", type=str, default=None, help=
         project_flag_description)
@@ -138,8 +133,8 @@ def get_bimon_parser() -> ArgumentParser:
         "The issue to test. Can be a link or number.")
     bisect_parser.add_argument("-r", "--range", type=str, default=None, help=
         "An initial, already confirmed range to bisect over, format \"good_ref..bad_ref\".")
-    bisect_parser.add_argument("-e", "--execution-parameters", type=str, help=
-        "The parameters to pass to the executable. See the config.ini comments for details.")
+    bisect_parser.add_argument("-e", "--execution-arguments", type=str, help=
+        "The arguments to pass to the executable. See the config.ini comments for details.")
     bisect_parser.add_argument("-d", "--discard", action="store_true", help=
         "Prevents caching binaries compiled during a bisect.")
     bisect_parser.add_argument("--cached-only", action="store_true", help=
@@ -153,7 +148,7 @@ def get_bimon_parser() -> ArgumentParser:
     add_messages("bisect", bisect_parser)
     bisect_parser.set_defaults(func=lambda args: 
         commands.bisect_command(
-            execution_parameters=args.execution_parameters, 
+            execution_args=args.execution_arguments, 
             discard=args.discard, 
             cached_only=args.cached_only, 
             ignore_date=args.ignore_date, 
@@ -163,21 +158,49 @@ def get_bimon_parser() -> ArgumentParser:
             flexible_args=args.flexible_args, 
             ref_range=args.range))
 
-    clean_parser = subparsers.add_parser("clean", help=
-        "Delete unneeded files.",
+    create_parser = subparsers.add_parser("create",
+        help="Creates a new project.",
+        description="Creates a new named project you can use in the run and bisect commands.",
+        usage="bimon.py create [-t TITLE] NAME",
+        add_help=False)
+    create_parser.add_argument("-t", "--title", type=str, help=
+        "The title to add to the project file.")
+    create_parser.add_argument("name", help=
+        "The name of the project to create.")
+    add_messages("create", create_parser)
+    create_parser.set_defaults(func=lambda args: 
+        commands.create_command(args.name, args.title))
+
+    export_parser = subparsers.add_parser("export",
+        help="Export a zipped version of a project for easy uploading.",
+        description="",
+        usage="bimon.py export [-t TITLE] NAME TARGET",
+        add_help=False)
+    export_parser.add_argument("-t", "--title", type=str, default=None, help=
+        "Sets the exported project's title.")
+    export_parser.add_argument("name", help=
+        "The name of the project to export. Often an issue number.")
+    export_parser.add_argument("target", help=
+        "The zip name to export to.")
+    add_messages("export", export_parser)
+    export_parser.set_defaults(func=lambda args: 
+        commands.export_command(args.name, args.target, args.title))
+
+    clean_parser = subparsers.add_parser("clean",
+        help="Delete unneeded files.",
+        description="",
+        usage="bimon.py clean [-d] [-b] [-c] [-t] [--projects] [--loose-files] [--dry-run]",
         add_help=False)
     clean_parser.add_argument("-d", "--duplicates", action="store_true", help=
         "Delete uncompressed versions that are duplicates of compressed versions.")
-    clean_parser.add_argument("-b", "--build", "--build-artifacts", action="store_true", help=
+    clean_parser.add_argument("-b", "--build-artifacts", action="store_true", help=
         "Runs scons --clean.")
     clean_parser.add_argument("-c", "--caches", action="store_true", help=
         "Delete internal caches, mostly stored git information.")
     clean_parser.add_argument("-t", "--temp-files", action="store_true", help=
         "Delete the temporary storage locations used by various commands.")
     clean_parser.add_argument("--projects", action="store_true", help=
-        "Delete all repro projects, including ones you've made. Use with caution.")
-    clean_parser.add_argument("--downloads", action="store_true", help=
-        "Delete all downloaded projects. Use with caution.")
+        "Delete all projects, including ones you've made. Use with caution.")
     clean_parser.add_argument("--loose-files", action="store_true", help=
         "Delete any unrecognized files in the versions directory. Use with caution.")
     clean_parser.add_argument("--dry-run", action="store_true", help=
@@ -194,8 +217,10 @@ def get_bimon_parser() -> ArgumentParser:
             dry_run=args.dry_run))
 
     # Plumbing commands
-    compile_parser = subparsers.add_parser("compile", help=
-        "Compile and store specific commits.",
+    compile_parser = subparsers.add_parser("compile",
+        help="Compile and store specific commits.",
+        description="",
+        usage="bimon.py compile [COMMIT_OR_RANGE]...",
         add_help=False)
     compile_parser.add_argument("ref_ranges", nargs="*", default="HEAD", help=
         "The commits to compile. Accepts references, ranges, or PRs. Uses HEAD if not provided.")
@@ -203,8 +228,10 @@ def get_bimon_parser() -> ArgumentParser:
     compile_parser.set_defaults(func=lambda args: 
         commands.compile_command(args.refs))
 
-    compress_parser = subparsers.add_parser("compress", help=
-        "Archive completed bundles.",
+    compress_parser = subparsers.add_parser("compress",
+        help="Archive completed bundles.",
+        description="",
+        usage="bimon.py compress [-a]",
         add_help=False)
     compress_parser.add_argument("-a", "--all", action="store_true", help=
         "Forces all files into bundles even if it makes suboptimal bundles.")
@@ -212,29 +239,18 @@ def get_bimon_parser() -> ArgumentParser:
     compress_parser.set_defaults(func=lambda args: 
         commands.compress_command(args.all))
 
-    extract_parser = subparsers.add_parser("extract", help=
-        "Extract a specific version that's already built from storage.",
+    extract_parser = subparsers.add_parser("extract",
+        help="Extract a specific version that's already built from storage.",
+        description="",
+        usage="bimon.py extract REF [FOLDER]",
         add_help=False)
-    extract_parser.add_argument("ref", help=
-        "The version to extract. Can be a reference that resolves to a version.")
-    extract_parser.add_argument("folder", nargs="?", help=
-        "The folder to extract to.")
+    extract_parser.add_argument("ref",
+        help="The version to extract. Can be a reference that resolves to a version.")
+    extract_parser.add_argument("folder", nargs="?",
+        help="The folder to extract to.")
     add_messages("extract", extract_parser)
     extract_parser.set_defaults(func=lambda args: 
         commands.extract_command(args.ref, args.folder))
-
-    export_parser = subparsers.add_parser("export", help=
-        "Export a zipped version of a project for easy uploading.",
-        add_help=False)
-    export_parser.add_argument("-t", "--title", type=str, default=None, help=
-        "Sets the exported project's title.")
-    export_parser.add_argument("name", help=
-        "The name of the project to export. Often an issue number.")
-    export_parser.add_argument("target", help=
-        "The location to extract to.")
-    add_messages("export", export_parser)
-    export_parser.set_defaults(func=lambda args: 
-        commands.export_command(args.name, args.target, args.title))
 
     write_precache_parser = subparsers.add_parser("write-precache",
         add_help=False)
@@ -243,8 +259,10 @@ def get_bimon_parser() -> ArgumentParser:
     write_precache_parser.set_defaults(func=lambda _: 
         commands.write_precache_command())
 
-    parser_help = subparsers.add_parser("help", help=
-        "Print detailed help on some or all commands.",
+    parser_help = subparsers.add_parser("help",
+        help="Print detailed help on some or all commands.",
+        description="",
+        usage="bimon.py help [COMMAND_PREFIX]",
         add_help=False)
     parser_help.add_argument("command_prefix", nargs="?", help=
         "Optional command to show help for.")
@@ -256,12 +274,12 @@ def get_bimon_parser() -> ArgumentParser:
 
 
 def get_bisect_parser() -> ArgumentParser:
-    parser = ArgumentParser()
-    add_bisect_parser(parser, interactive=True)
+    parser = ArgumentParser(exit_on_error=False)
+    add_bisect_parser(parser)
     return parser
 
 
-def add_bisect_parser(parent_parser: ArgumentParser, interactive: bool) -> None:
+def add_bisect_parser(parent_parser: ArgumentParser) -> None:
     help_messages = []
     def add_messages(command: str, parser: ArgumentParser) -> None:
         parser.add_argument("-h", "--help", action="help", default=SUPPRESS, help=
@@ -269,103 +287,100 @@ def add_bisect_parser(parent_parser: ArgumentParser, interactive: bool) -> None:
         help_messages.append((command, parser.format_usage(), parser.format_help()))
 
     parser = parent_parser.add_subparsers(
-        dest=("" if interactive else "sub") + "command",
-        required=not interactive, 
+        dest="command",
+        required=False, 
         description=("Any command that takes commits also accepts any git reference"
         + " and defaults to the current commit if none are provided."
         + " Good, bad, skip, and unmark may be combined in one line."
         + "Any unique prefix of a command is acceptable."
         + " For example, \"g\" is equivalent to \"good\"."))
 
-    if not interactive:
-        parser_start = parser.add_parser("start", add_help=False, help=
-            "Starts a new bisect.")
-        add_messages("start", parser_start)
-        parser_start.set_defaults(func=lambda bisector, args: 
-            print("TODO: Unimplemented"))
-
-        parser_reset = parser.add_parser("reset", add_help=False, help=
-            "Clears any existing bisects.")
-        add_messages("reset", parser_reset)
-        parser_reset.set_defaults(func=lambda bisector, args: 
-            print("TODO: Unimplemented"))
-
-    if interactive:
-        parser_automate = parser.add_parser("automate", add_help=False, help=
-            "Enable automatic opening of versions.")
-        parser_automate.add_argument("-g", "--good", type=str, default=None, help=
-            "A string that indicates this is a good commit if printed during execution.")
-        parser_automate.add_argument("-b", "--bad", type=str, default=None, help=
-            "A string that indicates this is a good commit if printed during execution.")
-        parser_automate.add_argument("-c", "--crash", type=str, default=None, help=
-            "Can be good, bad, or skip."
-            + " Indicates what to mark commits if the program exits non-zero.")
-        parser_automate.add_argument("-e", "--exit", type=str, default=None, help=
-            "Can be good, bad, or skip. Indicates what to mark commits if the program exits zero.")
-        parser_automate.add_argument("-s", "--script", type=str, default=None, help=
-            "If provided, runs the script instead of the executable."
-            + " The command that would've run otherwise is passed to the script.")
-        parser_automate.add_argument("-r", "--regex", type=bool, default=False, help=
-            "If provided, the --good and --bad arguments are treated as regexes.")
-        add_messages("automate", parser_automate)
-        parser_automate.set_defaults(func=lambda bisector, args: 
-            bisector.automate_command(
-                args.good, 
-                args.bad, 
-                args.crash, 
-                args.exit, 
-                args.script, 
-                args.regex))
-
-        parser_pause = parser.add_parser("pause", add_help=False, help=
-            "Pause automatic opening of versions.")
-        add_messages("pause", parser_pause)
-        parser_pause.set_defaults(func=lambda bisector, _: 
-            bisector.pause_command())
-
-        parser_exit = parser.add_parser("exit", add_help=False, help=
-            "Exit interactive bisect.")
-        add_messages("exit", parser_exit)
-        parser_exit.set_defaults(func=lambda bisector, _: 
-            bisector.exit_command())
-        parser_quit = parser.add_parser("quit", add_help=False, help=SUPPRESS)
-        parser_quit.set_defaults(func=lambda bisector, _: 
-            bisector.exit_command())
-
-    parser_good = parser.add_parser("good", add_help=False, help=
-        "Mark commits as good.")
+    parser_good = parser.add_parser("good", add_help=False,
+        help="Mark commits as good.",
+        description="Mark commits as good. Can be combined with bad, skip, or unmark.",
+        usage="good [COMMIT]...")
     parser_good.add_argument("commits", nargs="*", help=
-        "The commits to mark as good.")
+        "The commits to mark as good. Accepts any git reference.")
     add_messages("good", parser_good)
     parser_good.set_defaults(func=lambda bisector, args: 
         bisector.mark_command("good", args.commits))
 
-    parser_bad = parser.add_parser("bad", add_help=False, help=
-        "Mark commits as bad.")
+    parser_bad = parser.add_parser("bad", add_help=False,
+        help="Mark commits as bad.",
+        description="Mark commits as bad. Can be combined with good, skip, or unmark.",
+        usage="bad [COMMIT]...")
     parser_bad.add_argument("commits", nargs="*", help=
-        "The commits to mark as bad.")
+        "The commits to mark as bad. Accepts any git reference.")
     add_messages("bad", parser_bad)
     parser_bad.set_defaults(func=lambda bisector, args: 
         bisector.mark_command("bad", args.commits))
 
-    parser_skip = parser.add_parser("skip", add_help=False, help=
-        "Mark commits as untestable.")
+    parser_skip = parser.add_parser("skip", add_help=False,
+        help="Mark commits as untestable.",
+        description="Mark commits as untestable. Can be combined with good, bad, or unmark.",
+        usage="skip [COMMIT]...")
     parser_skip.add_argument("commits", nargs="*", help=
-        "The commits to mark as untestable.")
+        "The commits to mark as untestable. Accepts any git reference.")
     add_messages("skip", parser_skip)
     parser_skip.set_defaults(func=lambda bisector, args: 
         bisector.mark_command("skip", args.commits))
 
-    parser_unmark = parser.add_parser("unmark", add_help=False, help=
-        "Unmark commits.")
+    parser_unmark = parser.add_parser("unmark", add_help=False,
+        help="Unmark commits.",
+        description="Unmark commits as good, bad, or skipped. Can be combined with good, bad, or skip.",
+        usage="unmark [COMMIT]...")
     parser_unmark.add_argument("commits", nargs="*", help=
-        "The commits to unmark.")
+        "The commits to unmark as good, bad, or skipped. Accepts any git reference.")
     add_messages("unmark", parser_unmark)
     parser_unmark.set_defaults(func=lambda bisector, args: 
         bisector.mark_command("unmark", args.commits))
 
-    parser_run = parser.add_parser("run", add_help=False, help=
-        "Runs a specific commit.")
+    parser_automate = parser.add_parser("automate", add_help=False,
+        help="Enable automatic opening and marking of versions.",
+        description="Starts opening commits automatically with options to help mark commit automatically, as well.",
+        usage="automate [-g GOOD_TEXT] [-b BAD_TEXT] [-c good/bad/skip] [-e good/bad/skip] [-r REGEX] [-s SCRIPT]",)
+    parser_automate.add_argument("-g", "--good", type=str, default=None, help=
+        "If this text is printed during execution, mark the commit as good")
+    parser_automate.add_argument("-b", "--bad", type=str, default=None, help=
+        "If this text is printed during execution, mark the commit as bad")
+    parser_automate.add_argument("-c", "--crash", type=str, default=None, help=
+        "What to mark commits that crash during execution (good/bad/skip)")
+    parser_automate.add_argument("-e", "--exit", type=str, default=None, help=
+        "What to mark commits that exit normally (good/bad/skip)")
+    parser_automate.add_argument("-r", "--regex", action="store_true", help=
+        "If provided, --good and --bad are treated as regexes")
+    parser_automate.add_argument("-s", "--script", type=str, default=None, help=
+        "Run this script instead of the executable, passing it the executable location and arguments")
+    add_messages("automate", parser_automate)
+    parser_automate.set_defaults(func=lambda bisector, args: 
+        bisector.automate_command(
+            args.good, 
+            args.bad, 
+            args.crash, 
+            args.exit, 
+            args.script, 
+            args.regex))
+
+    parser_pause = parser.add_parser("pause", add_help=False,
+        help="Pause automatic opening of versions.",
+        description="Stops automatically opening commits; other automation remains active.")
+    add_messages("pause", parser_pause)
+    parser_pause.set_defaults(func=lambda bisector, _: 
+        bisector.pause_command())
+
+    parser_exit = parser.add_parser("exit", add_help=False,
+        help="Exit interactive bisect.",
+        description="Exits the interactive bisect and prints a final status message.")
+    add_messages("exit", parser_exit)
+    parser_exit.set_defaults(func=lambda bisector, _: 
+        bisector.exit_command())
+    parser_quit = parser.add_parser("quit", add_help=False, help=SUPPRESS)
+    parser_quit.set_defaults(func=lambda bisector, _: 
+        bisector.exit_command())
+
+    parser_run = parser.add_parser("run", add_help=False,
+        help="Runs godot.",
+        description="Runs the given commits in order.")
     parser_run.add_argument("commit", nargs="*", help=
         "The commit or git reference to open. Defaults to the current commit.")
     add_messages("run", parser_run)
@@ -373,33 +388,35 @@ def add_bisect_parser(parent_parser: ArgumentParser, interactive: bool) -> None:
         bisector.run_command(args.commit))
 
     parser_list = parser.add_parser("list", add_help=False, help=
-        "List all remaining possible commits.")
+        "Lists all remaining possible commits.")
     parser_list.add_argument("-s", "--short", action="store_true", help=
         "Print only shortened commit SHAs and no log information.")
     add_messages("list", parser_list)
     parser_list.set_defaults(func=lambda bisector, args: 
         bisector.list_command(args.short))
 
-    parser_status = parser.add_parser("status", add_help=False, help=
-        "Print information about the state of the current bisect.")
+    parser_status = parser.add_parser("status", add_help=False, 
+        help="Prints summary information about the current bisect.",
+        description="Prints summary information about the current bisect.")
     parser_status.add_argument("-s", "--short", action="store_true", help=
-        "Don't print the minimal commit sets.")
+        "Print only the primary status information.")
     add_messages("status", parser_status)
     parser_status.set_defaults(func=lambda bisector, args: 
         bisector.status_command(args.short))
 
-    parser_set_params = parser.add_parser("set-params", add_help=False, help=
-        "Replaces the current execution parameters.")
-    parser_set_params.add_argument("execution_parameters", help=
-        "The new execution parameters to pass into binaries when running them.")
-    add_messages("set-params", parser_set_params)
-    parser_set_params.set_defaults(func=lambda bisector, args: 
-        bisector.set_parameters_command(args.execution_parameters))
+    parser_set_args = parser.add_parser("set-arguments", add_help=False, 
+        help="Updates the arguments Godot will be run with.",
+        description="Updates the arguments Godot will be run with.")
+    parser_set_args.add_argument("arguments", help=
+        "The new arguments to pass into binaries when running them.")
+    add_messages("set-args", parser_set_args)
+    parser_set_args.set_defaults(func=lambda bisector, args: 
+        bisector.set_arguments_command(args.execution_args))
 
     parser_help = parser.add_parser("help", add_help=False, help=
-        "Print a help message.")
+        "Prints a help message.")
     parser_help.add_argument("command_prefix", nargs="?", help=
-        "Optional command to show help for.")
+        "Show help for all commands that match the given prefix")
     add_messages("help", parser_help)
     parser_help.set_defaults(func=lambda _, args: 
         commands.help_command(help_messages, args.command_prefix, {"exit": ["quit"]}))

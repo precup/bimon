@@ -5,12 +5,17 @@ import sys
 
 from src import git
 from src import parsers
+from src import release_processor
 from src import storage
 from src import terminal
 from src.config import Configuration
 
 
 def main() -> None:
+    if sys.version_info < (3, 12):
+        print("BiMon requires Python 3.12 or higher. The future is now.")
+        sys.exit(1)
+
     original_wd = os.getcwd()
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
     storage.init_storage()
@@ -27,7 +32,19 @@ def main() -> None:
         
     args = parser.parse_args(clean_args)
     _setup_configuration(args, original_wd)
-    _ensure_workspace(args)
+
+    _ensure_workspace(
+        args, 
+        Configuration.WORKSPACE_PATH, 
+        "https://github.com/godotengine/godot.git")
+    made_secondary_workspace = False
+    if Configuration.SECONDARY_WORKSPACE_PATH != "":
+        made_secondary_workspace =_ensure_workspace(
+            args, 
+            Configuration.SECONDARY_WORKSPACE_PATH, 
+            "https://github.com/godotengine/godot-builds.git")
+    release_processor.add_any_new_release_tags(force=made_secondary_workspace)
+
     args.func(args)
 
 
@@ -46,10 +63,9 @@ def _setup_configuration(args, original_wd: str) -> None:
         Configuration.PRINT_MODE = args.print_mode
 
 
-def _ensure_workspace(args) -> None:
-    workspace = Configuration.WORKSPACE_PATH
+def _ensure_workspace(args, workspace: str, git_address: str) -> bool:
     if not os.path.exists(workspace):
-        print(f"BiMon requires a Godot workspace at path \"{workspace}\".")
+        print(f"BiMon requires a godot workspace at path \"{workspace}\".")
         should_clone = False
         if hasattr(args, "y") and args.y:
             print("Cloning one there now...")
@@ -59,10 +75,12 @@ def _ensure_workspace(args) -> None:
             should_clone = not response.strip().lower().startswith("n")
 
         if should_clone:
-            git.clone("https://github.com/godotengine/godot.git", workspace)
+            git.clone(git_address, workspace)
+            return True
         else:
             print("BiMon requires a Godot workspace to function. Exiting.")
             sys.exit(1)
+    return False
 
 
 if __name__ == "__main__":

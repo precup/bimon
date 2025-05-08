@@ -115,7 +115,7 @@ def update_neighbors(commits: Optional[set[str]] = None) -> None:
         )
     if should_update:
         for flag, cache in (("--parents", _parent_cache), ("--children", _child_cache)):
-            lines = get_git_output(["rev-list", flag, "--all"]).splitlines()
+            lines = get_git_output(["rev-list", "--use-bitmap-index", flag, "--all"]).splitlines()
             for line in lines:
                 parts = line.split()
                 cache[parts[0]] = set(parts[1:])
@@ -199,16 +199,20 @@ def check_out_pull(pull_number: int, branch_name = Optional[str]) -> None:
     check_out(branch_name)
 
 
-def fetch() -> None:
+def fetch(repository: str = Configuration.WORKSPACE_PATH) -> bool:
     global _already_fetched
-    if _already_fetched:
-        return
+    if Configuration.WORKSPACE_PATH == repository and _already_fetched:
+        return False
     fetch_command = ["fetch", "--tags", "--prune", "origin"]
     fetch_output = get_git_output(fetch_command, include_err=True)
     if len(fetch_output) > 0:
         print(fetch_output)
         _cache_clear()
-    _already_fetched = True
+
+    if Configuration.WORKSPACE_PATH == repository:
+        _already_fetched = True
+    
+    return len(fetch_output) > 0
 
 
 def get_last_fetch_time() -> int:
@@ -219,9 +223,10 @@ def get_last_fetch_time() -> int:
 def get_git_output(
         args: list[str], 
         include_err: bool = False, 
-        input_str: Optional[str] = None) -> str:
+        input_str: Optional[str] = None,
+        repository: str = Configuration.WORKSPACE_PATH) -> str:
     try:
-        command = ["git", "-C", Configuration.WORKSPACE_PATH] + args
+        command = ["git", "-C", repository] + args
         output_bytes = subprocess.check_output(
             command, 
             stderr=subprocess.STDOUT if include_err else None,
@@ -319,7 +324,7 @@ def resolve_ref(ref: str, fetch_if_missing: bool = False, use_cache: bool = True
 
 def _resolve_ref_uncached(ref: str) -> str:
     ref = ref.strip()
-    output = get_git_output(["rev-parse", "--revs-only", ref], include_err=True)
+    output = get_git_output(["rev-parse", "--revs-only", ref + "^{commit}"], include_err=True)
     ref_lines = [line.strip() for line in output.splitlines() if ref in line]
     if len(ref) > 0 and not ref.isdigit() and len(ref_lines) > 1:
         print("Potentially ambiguous reference requested.")
@@ -347,7 +352,7 @@ def _get_commit_list(
         end_ref: str, 
         path_spec: Optional[str] = None, 
         before: int = -1) -> list[str]:
-    command = ["rev-list", "--reverse"]
+    command = ["rev-list", "--use-bitmap-index", "--reverse"]
     if before >= 0:
         command += [f"--before={before}"]
     if end_ref == "":
@@ -434,7 +439,7 @@ def get_bisect_commits(
     if len(good_refs) == 0 or len(bad_refs) == 0:
         return list(get_bounded_commits(good_refs, bad_refs, path_spec, before))
     command = (
-        ["rev-list", "--bisect-all"] 
+        ["rev-list", "--use-bitmap-index", "--bisect-all"] 
         + list(bad_refs)
         + [f"^{commit}" for commit in good_refs]
     )
@@ -597,6 +602,13 @@ def minimal_children(children: set[str]) -> set[str]:
             for test_commit in children if commit != test_commit
         )
     }
+
+
+def add_tags(tags: dict[str, str]) -> None:
+    existing_tags = get_tags()
+    for tag, commit in tags.items():
+        if tag not in existing_tags:
+            get_git_output(["tag", tag, commit])
 
 
 def _cache_clear() -> None:

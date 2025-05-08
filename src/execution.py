@@ -35,14 +35,14 @@ def _mark_used(commit: str) -> None:
 
 def launch(
         ref: str, 
-        execution_parameters: str, 
+        execution_arguments: str, 
         present_versions: set[str], 
         discard: bool, 
         cached_only: bool, 
         wd: str = "") -> bool:
     return launch_with_automation(
         ref,
-        execution_parameters,
+        execution_arguments,
         present_versions,
         discard,
         cached_only,
@@ -51,7 +51,7 @@ def launch(
 
 def launch_with_automation(
         ref: str, 
-        execution_parameters: str, 
+        execution_arguments: str, 
         present_versions: set[str], 
         discard: bool, 
         cached_only: bool, 
@@ -81,7 +81,7 @@ def launch_with_automation(
         if discard:
             return _launch_folder(
                 Configuration.WORKSPACE_PATH, 
-                execution_parameters, 
+                execution_arguments, 
                 wd,
                 automate_good,
                 automate_good_regex,
@@ -102,7 +102,7 @@ def launch_with_automation(
     _mark_used(commit)
     return _launch_folder(
         storage.get_version_folder(commit), 
-        execution_parameters, 
+        execution_arguments, 
         wd,
         automate_good,
         automate_good_regex,
@@ -133,7 +133,7 @@ def _find_executable(
 
 def _launch_folder(
         workspace_path: str, 
-        execution_parameters: str, 
+        execution_arguments: str, 
         wd: str,
         automate_good: Optional[str],
         automate_good_regex: Optional[re.Pattern],
@@ -150,7 +150,7 @@ def _launch_folder(
         return "error"
     executable_path = str(Path(executable_path).resolve())
 
-    command = [executable_path] + shlex.split(execution_parameters, posix='nt' != os.name)
+    command = [executable_path] + shlex.split(execution_arguments, posix='nt' != os.name)
     if automate_script is not None:
         command = [automate_script] + command
 
