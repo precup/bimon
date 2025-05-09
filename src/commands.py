@@ -253,6 +253,10 @@ def clean_command(
         loose_files: Optional[bool], 
         build_artifacts: Optional[bool],
         dry_run: bool = False) -> None:
+    if not projects and not duplicates and not caches and not temp_files and not loose_files and not build_artifacts:
+        print("No options provided, nothing to be done.")
+        return
+
     clean_count = 0
     if duplicates:
         clean_count += storage.clean_duplicate_files(dry_run=dry_run)

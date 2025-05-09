@@ -21,7 +21,7 @@ def main() -> None:
     storage.init_storage()
     terminal.init_terminal()
     
-    parser = parsers.get_bimon_parser()
+    parser = parsers.get_bimon_parser(sys.argv[1] if len(sys.argv) > 1 else None)
     clean_args = parsers.preparse_bimon_command(sys.argv[1:])
     if len(clean_args) == 0:
         if len(sys.argv) == 1:
@@ -33,17 +33,16 @@ def main() -> None:
     args = parser.parse_args(clean_args)
     _setup_configuration(args, original_wd)
 
-    _ensure_workspace(
+    update_tags = _ensure_workspace(
         args, 
         Configuration.WORKSPACE_PATH, 
         "https://github.com/godotengine/godot.git")
-    made_secondary_workspace = False
     if Configuration.SECONDARY_WORKSPACE_PATH != "":
-        made_secondary_workspace =_ensure_workspace(
+        update_tags = _ensure_workspace(
             args, 
             Configuration.SECONDARY_WORKSPACE_PATH, 
-            "https://github.com/godotengine/godot-builds.git")
-    release_processor.add_any_new_release_tags(force=made_secondary_workspace)
+            "https://github.com/godotengine/godot-builds.git") or update_tags
+    release_processor.add_any_new_release_tags(force=update_tags)
 
     args.func(args)
 

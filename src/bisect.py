@@ -88,45 +88,35 @@ class Bisector:
 
         temp_goods = set(self._goods)
         temp_bads = set(self._bads)
-        temp_skips = set(self._skips)
 
         temp_goods.difference_update(new_unmarks)
         temp_bads.difference_update(new_unmarks)
-        temp_skips.difference_update(new_unmarks)
 
         temp_goods.update(new_goods)
         temp_bads.update(new_bads)
-        temp_skips.update(new_skips)
 
-        if len(temp_goods) > 0 and len(temp_bads) > 0:
-            bisect_commits = self.get_bisect_commits(temp_goods, temp_bads)
+        temp_bads = git.minimal_parents(temp_bads)
+        temp_goods = git.minimal_children(temp_goods)
+        covered = git.minimal_parents(temp_bads | temp_goods)
+        if len(temp_bads) > 0 and len(temp_goods) > 0 and len(temp_goods - covered) == 0:
+            if not silent:
+                commit = git.get_merge_base(list(sorted(temp_goods))[0], list(sorted(temp_bads))[0])
+                print("Warning: Good commits weren't ancestors of bad commits.")
+                if commit != "":
+                    commit = git.get_short_name(commit)
+                    print(f"If the number of possible commits seems too high, try {commit} instead.")
 
-            if len(bisect_commits) == 0:
-                if not silent and self._path_spec is not None and self._path_spec != "":
-                    all_bisect_commits = self.get_bisect_commits(temp_goods, temp_bads, "")
-                    if len(all_bisect_commits) > 0:
-                        print("That would result in no possible remaining commits.")
-                        print("There are remaining commits that don't match your path spec, however.")
-                        response = input("Would you like to remove the path spec? [y/N]: ")
-                        if response.strip().lower().startswith("y"):
-                            bisect_commits = all_bisect_commits
-                            self._path_spec = None
-                            print("Path spec removed, continuing.")
-                
-                if len(bisect_commits) == 0:
-                    if not silent:
-                        print("That would result in no possible remaining commits. Ignoring.")
+        for bad in temp_bads:
+            for good in temp_goods:
+                if git.is_ancestor(good, bad):
+                    print(f"Warning: {git.get_short_name(good)} (bad) is an ancestor of {git.get_short_name(bad)} (good).")
+                    print("This makes the bisect impossible, please check your commits. Ignoring.")
                     return False
 
-        self._goods.difference_update(new_unmarks)
-        self._bads.difference_update(new_unmarks)
-        self._skips.difference_update(new_unmarks)
-
-        self._goods.update(temp_goods)
-        self._bads.update(temp_bads)
-        # TODO this is a hack
+        self._goods = temp_goods
         self._bads = temp_bads
-        self._skips.update(temp_skips)
+        self._skips.difference_update(new_unmarks)
+        self._skips.update(new_skips)
 
         return True
 
@@ -140,8 +130,24 @@ class Bisector:
                                   + (["bad"] if len(self._bads) == 0 else []))
                 print(f"No {types} commits marked, can't calculate a bisect commit.")
             return None, Bisector.CommandResult.SUCCESS
+        
+        bads = list(sorted(self._bads))
+        for i, bad in enumerate(bads):
+            for j in range(i + 1, len(bads)):
+                merge_base = git.get_merge_base(bad, bads[j])
+                if len(merge_base) > 0:
+                    if not silent:
+                        print("Bad commits weren't ancestors of each other, testing the merge base just in case.")
+                        print("This is very likely a bad commit.")
+                    return merge_base, Bisector.CommandResult.SUCCESS
+        
+        if len(bads) > 1:
+            if not silent:
+                print("Warning: Multiple bad targets possible, using the first one.")
+                print("Please report, I didn't expect this to happen.")
+        bad = bads[0]
 
-        bisect_commits = self.get_bisect_commits(self._goods, self._bads)
+        bisect_commits = self.get_bisect_commits(self._goods, bad)
         if len(bisect_commits) == 0:
             if not silent:
                 print("No possible commits found for those good and bad commits.")
@@ -151,7 +157,7 @@ class Bisector:
             return bisect_commits[0], Bisector.CommandResult.EXIT
 
         if self._path_spec is not None and self._path_spec != "":
-            all_bisect_commits = set(self.get_bisect_commits(self._goods, self._bads, ""))
+            all_bisect_commits = set(self.get_bisect_commits(self._goods, bad, ""))
             all_bisect_commits = (
                 (all_bisect_commits & self._present_versions)
                 - self._ignored_commits
@@ -190,14 +196,14 @@ class Bisector:
     def get_bisect_commits(
             self,
             goods: set[str],
-            bads: set[str],
+            bad: str,
             path_spec: Optional[str] = None) -> list[str]:
         if path_spec is None:
             path_spec = self._path_spec
 
         return git.get_bisect_commits(
             good_refs=goods, 
-            bad_refs=bads, 
+            bad_ref=bad, 
             path_spec=path_spec, 
             before=self._end_timestamp)
 
@@ -351,7 +357,7 @@ class Bisector:
             print("No bad commits marked, can't calculate a commit list.")
             return Bisector.CommandResult.ERROR
 
-        bisect_commits = self.get_bisect_commits(self._goods, self._bads)
+        bisect_commits = self.get_bisect_commits(self._goods, list(sorted(self._bads))[0])
         if short:
             print(" ".join([git.get_short_name(commit, plain=True) for commit in bisect_commits]))
         else:
@@ -377,7 +383,11 @@ class Bisector:
 
 
     def print_exit_message(self) -> None:
-        remaining = set(self.get_bisect_commits(self._goods, self._bads))
+        if len(self._goods) == 0 or len(self._bads) == 0:
+            print()
+            return
+
+        remaining = set(self.get_bisect_commits(self._goods, list(sorted(self._bads))[0]))
         if len(remaining) == 1:
             bad_commit = list(remaining)[0]
             print("Only one commit left, must be " + git.get_short_name(bad_commit))
@@ -387,8 +397,7 @@ class Bisector:
         print("\nExiting bisect interactive mode.")
 
         if len(remaining) > 1:
-            if len(self._goods) > 0 and len(self._bads) > 0:
-                print(f"There are {len(remaining)} remaining possible commits.")
+            print(f"There are {len(remaining)} remaining possible commits.")
             if len(self._goods | self._bads | self._skips) > 0:
                 print("You can resume with:")
                 self._print_resume_sets()
@@ -403,7 +412,7 @@ class Bisector:
         if len(self._goods) > 0 and len(self._bads) > 0:
             remaining = set(git.get_bisect_commits(
                 good_refs=self._goods, 
-                bad_refs=self._bads, 
+                bad_ref=list(sorted(self._bads))[0], 
                 path_spec=self._path_spec, 
                 before=self._end_timestamp))
             
@@ -449,14 +458,15 @@ class Bisector:
                 queue.append((good_next_commit, current_layer + 1, new_goods, inherited_bads))
             self._goods -= new_goods
 
-            new_bads = inherited_bads | {current_commit}
-            self._bads |= new_bads
+            new_bads = {current_commit}
+            old_bads = self._bads
+            self._bads = new_bads
             bad_next_commit, status = self.get_next_commit(silent=True)
             succeeded = bad_next_commit is not None and status == Bisector.CommandResult.SUCCESS
             if succeeded and bad_next_commit not in to_decompress:
                 to_decompress.append(bad_next_commit)
                 queue.append((bad_next_commit, current_layer + 1, inherited_goods, new_bads))
-            self._bads -= new_bads
+            self._bads = old_bads
 
         storage.set_decompress_queue(to_decompress)
 

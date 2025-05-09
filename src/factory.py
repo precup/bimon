@@ -173,12 +173,14 @@ def _get_fraction_completed(commit_list: list[str], present_versions: set[str]) 
     return len(present_commits) / max(1, len(commit_list))
 
 
-def _build_tag_line(tags: list[str], bucket_times: list[int]) -> str:
-    tags = [tag for tag in tags if tag.find(".") == tag.rfind(".")]
+def _build_tag_line(tags: list[str], endpoint: str, bucket_times: list[int]) -> str:
+    tags = [tag for tag in tags if tag.find(".") == tag.rfind(".") and "stable" in tag]
+    print(f"Tags: {tags}")
+    tag_bases = [git.get_merge_base(tag, endpoint) for tag in tags]
     tag_times = git.get_commit_times(tags)
     tag_times = {
-        tag[:tag.find("-")]: tag_time
-        for tag, tag_time in tag_times.items()
+        tags[i][:tags[i].find("-")]: tag_times[tag_base]
+        for i, tag_base in enumerate(tag_bases)
     }
     tag_buckets = {
         tag: [
@@ -233,7 +235,7 @@ def _print_histogram(
     ]
     bucket_fractions += [0] * max(0, cols - 4 - len(bucket_fractions))
 
-    if Configuration.SHOW_TAGS_ON_HISTOGRAM:
+    if Configuration.SHOW_TAGS_ON_HISTOGRAM and len(full_commit_list) > 0:
         commit_times = git.get_commit_times(
             [bucket[0] for bucket in bucket_commits if len(bucket) > 0]
         )
@@ -242,7 +244,7 @@ def _print_histogram(
             for bucket in bucket_commits
         ]
 
-        print(terminal.box_content(_build_tag_line(tags, bucket_times)))
+        print(terminal.box_content(_build_tag_line(tags, full_commit_list[-1], bucket_times)))
 
         current_commit_time = git.get_commit_time(current_commit)
         possible_current_buckets = [

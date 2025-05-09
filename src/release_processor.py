@@ -15,6 +15,8 @@ def add_any_new_release_tags(force: bool = False) -> None:
     if len(releases) > 0:
         tags = {}
         for i in range(len(releases)):
+            if '-' not in releases[i][0]:
+                continue
             resolved = git.resolve_ref(releases[i][1])
             if resolved == "":
                 print(f"[WARNING] Release {releases[i][0]} points to a"
@@ -25,7 +27,7 @@ def add_any_new_release_tags(force: bool = False) -> None:
         git.add_tags(tags)
 
 
-def _get_releases() -> list[list[str, str]]:
+def _get_releases() -> list[list[str]]:
     releases = []
     for filename in os.listdir(_RELEASES_FOLDER):
         if filename.endswith(".json"):

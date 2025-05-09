@@ -87,7 +87,7 @@ python bimon.py update # + whatever args you'd like
 To run BiMon, use `./bimon.py [-q/-v/-l] [--color=yes/no] [--config=FILE] [-i] COMMAND [COMMAND_ARG...]`.
 
 ### Main commands:
-- `init` - Sets up the workspaces needed and performs some initial configuration checks.
+- `init` - Sets up the workspaces needed and runs some basic checks.
     - `-y`: Don't ask for permission to clone repositories.
 
 - `update` - Fetches, compiles, and caches missing commits.
@@ -98,30 +98,30 @@ To run BiMon, use `./bimon.py [-q/-v/-l] [--color=yes/no] [--config=FILE] [-i] C
 - `run` - Runs the requested version of Godot.
     - `--project PROJECT`: The project to use as a working directory when launching Godot
     - `--issue ISSUE`: The issue number or link to reproduce. Looks for associated projects locally and on the issue page.
-    - `--ref/--commit/--pr REF`: The version of Godot to run. May also be a PR number or link. All three are aliases of each other.
+    - `--ref REF`: The commit to run. May be a PR or any git reference.
     - `--execution-params PARAMS`: The arguments to pass to the Godot executable. Defaults to the value in the config file.
     - `--discard`: Don't store the result of any builds that occur
     - `FLEXIBLE_ARGS...`: Accepts anything `--project`, `--issue`, and `--ref` does and figures out which is which
 
-- `bisect` - Bisects history to find a regression's commit. Enters an interactive mode detailed below.
+- `bisect` - Bisects history to find a which commit introduced a regression. Enters an interactive mode detailed below.
     - `--project PROJECT`: The project to use as a working directory when launching Godot
     - `--issue ISSUE`: The issue number or link to reproduce. Looks for associated projects locally and on the issue page.
-    - `--range GOOD_REF..BAD_REF`: The initial commits used to calculate a bisect
-    - `--execution-params PARAMS`: The arguments to pass to the Godot executable. Defaults to the value in the config file.
+    - `--range GOOD_REF..BAD_REF`: A starting range to bisect down
+    - `--execution-params PARAMS`: The arguments to pass to the Godot executable. See the config.ini comments for details.
     - `--discard`: Don't store the result of any builds that occur
     - `--cached-only`: Only bisect using precompiled versions, stopping when compiles would be required
     - `--ignore-date`: If an issue is provided, its timestamp is used to roughly bound the bisect range. This disables that behavior.
-    - `--path-spec`: Limits the search to commits containing certain files. See `git bisect`'s documentation on `path-spec` for full details.
+    - `--path-spec`: Limits the search to commits with certain files. See `git bisect`'s path spec for details.
     - `FLEXIBLE_ARGS...`: Accepts anything `--project`, `--issue`, and `--range` does and figures out which is which
 
-- `create` - Creates a new project in the `projects` folder to be used with `run` and `bisect`.
+- `create` - Creates a new project in the `projects` folder you can use with `run` and `bisect`.
     - `--title TITLE`: The initial title for the project
     - `NAME`: The name to refer to this project by for other commands
 
 - `export NAME ZIP` - Exports a project from the `projects` folder to a zip for uploading.
     - `--title TITLE`: Overwrite the project title with `TITLE` on the exported project
-    - `NAME`: The project name to export
-    - `ZIP`: The destination path to export to
+    - `NAME`: The name of the project to export. Often an issue number.
+    - `ZIP`: The destination zip to export to
 
 - `clean` - Offers a variety of ways to clean up potentially wasted space.
     - `--duplicates`: Delete uncompressed versions that are duplicates of compressed versions
@@ -203,28 +203,12 @@ Bisection proceeds in two phases, where the range is first narrowed down as much
 > - `automate` calls overwrite each other
 
 ## TODO
-20 - Total
-    5 Output
-    - 4 Better output, colors, text decorations?
-    - 1 use merge base for tag buckets
+Fun
+    Make output prettier
 
-    13 Misc
-    - 4 LIVE mode can get stuck on Windows
-    - 4 bisect functionality is broken
-    - 4 Code function level clean up pass - 969
-        git - 280
-            I hate the cache functions
-            why are there no newlines anywhere
-            line 280 upwards
-        bisect - 689
-            like the whole file
-    - 1 bisect startup is like 3 seconds??
-
-    2 Documentation
-    - 2 Add 
-        descriptions
-        usages
-
+Later
+    bisect and git code cleanup
+    line lengths
 
 Testing!!!
     terminal.py non live mode mypy errors
@@ -232,11 +216,10 @@ Testing!!!
 4 Last things
 - 1 make precache file
 - 1 trailing whitespace
-- 1 update other platform config files
-- 1 look over TODOs
 
 #### Known Issues
 - Occassionally gets stuck when running a subprocess in live mode on Windows, proceeds after any input
+    - Windows currently uses `VERBOSE` mode for `update` by default as a result
 - Multiple instances running at once is not safe
 - Corrupted build artifacts/extractions aren't handled at all
 - Killing the extraction threads might litter the version space, hasn't been a problem *yet*

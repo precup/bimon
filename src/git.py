@@ -433,14 +433,11 @@ def _get_interesting_counts(
 
 def get_bisect_commits(
         good_refs: set[str], 
-        bad_refs: set[str], 
+        bad_ref: str, 
         path_spec: Optional[str] = None, 
         before: int = -1) -> list[str]:
-    if len(good_refs) == 0 or len(bad_refs) == 0:
-        return list(get_bounded_commits(good_refs, bad_refs, path_spec, before))
     command = (
-        ["rev-list", "--use-bitmap-index", "--bisect-all"] 
-        + list(bad_refs)
+        ["rev-list", "--use-bitmap-index", "--bisect-all", bad_ref]
         + [f"^{commit}" for commit in good_refs]
     )
     if before >= 0:
@@ -604,6 +601,13 @@ def minimal_children(children: set[str]) -> set[str]:
     }
 
 
+@functools.lru_cache(maxsize=None)
+def get_merge_base(commit_a: str, commit_b: str) -> str:
+    if commit_a == commit_b:
+        return commit_a
+    return get_git_output(["merge-base", commit_a, commit_b])
+
+
 def add_tags(tags: dict[str, str]) -> None:
     existing_tags = get_tags()
     for tag, commit in tags.items():
@@ -618,4 +622,5 @@ def _cache_clear() -> None:
     _get_commit_list.cache_clear()
     get_short_name.cache_clear()
     get_short_log.cache_clear()
+    get_merge_base.cache_clear()
     _resolve_ref_cached.cache_clear()
