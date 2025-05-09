@@ -41,12 +41,6 @@ BiMon also supports running individual versions if you're just trying to reprodu
 > [!WARNING]
 > I only have a Linux and Windows machine. This is heavily used on Linux, lightly tested on Windows, and a mystery on Mac. It *should* work, though?
 
-    cp default_(linux/windows/macos)_config.ini config.ini
-    # Edit config.ini as desired
-
-    python bimon.py init -y
-
-    python bimon.py
 ## Setup
 1) Clone the BiMon repository and set up a virtualenv:
 ```
@@ -146,7 +140,7 @@ To run BiMon, use `./bimon.py [-q/-v/-l] [--color=yes/no] [--config=FILE] [-i] C
     - `REF`: The version to extract the build artifacts for
     - `FOLDER`: The target output folder for the files to be extracted into. Defaults to `versions/COMMIT_SHA`.
 
-> [!TIPS]
+> [!TIP]
 > - Any unique prefix of a command is also accepted, as with flags. 
 > - Commands that accept a "ref" may be passed any git reference that resolves to a single commit, such as a branch or tag.
 > - Commands that accept a range use the format `START_REF..END_REF`. If either is omitted, that side of the range is unbounded. Ranges are inclusive unless bisecting.
@@ -196,7 +190,7 @@ When you run the `bisect` command, the program will enter an interactive mode. A
 
 Bisection proceeds in two phases, where the range is first narrowed down as much as possible using cached builds, and then that range is bisected by actually compiling and caching the commits.
 
-> [!TIPS]
+> [!TIP]
 > - `good`, `bad`, `skip`, and `unmark` can be combined on the same line (`g 4.4-dev1 b 4.5-stable`)
 > - `automate` with no arguments is still useful since you won't need to use `run` anymore
 > - You can use the other flags of `automate` to mark commits using `--script`
@@ -206,16 +200,53 @@ Bisection proceeds in two phases, where the range is first narrowed down as much
 Fun
     Make output prettier
 
-Later
-    bisect and git code cleanup
-    line lengths
-
 Testing!!!
-    terminal.py non live mode mypy errors
+    main flags
+        color
+        config
+        q
+        v
+        l
+        i
+    compress
+        compress some
+        compress all
+    ignored_commits
+    create
+        with and without title, usable in run
+    export
+        with and without title
 
-4 Last things
-- 1 make precache file
-- 1 trailing whitespace
+    update
+    run
+        testing PRs
+    bisect
+    clean
+    help
+    compile
+    extract
+
+    bisect
+        combining marking commands
+        full bisect
+        skip
+        unmark
+        weird combinations of good/bad
+        automate
+        pause
+        exit/quit
+        run
+        list
+        status
+        set-params
+        help
+    
+    config options
+
+
+enable autoclean once I've tested clean
+unmark is kinda broken
+update other configs to match line length changes
 
 #### Known Issues
 - Occassionally gets stuck when running a subprocess in live mode on Windows, proceeds after any input
@@ -229,6 +260,7 @@ Testing!!!
 #### Maybe Someday
 - Non interactive bisect mode
 - Make more general so this isn't just a Godot specific tool
-- Sentinel usage cleanup/function cleanup pass
+- Sentinel usage cleanup
+- git.py and bisect.py cleanup
 - Switch path-spec to being input with -- like git
 - Lifetime stats :D

@@ -83,9 +83,9 @@ def save_precache() -> None:
 
 
 def _save_cache(
-        cache_name: str, 
-        commit_time_cache: dict[str, int], 
-        diff_cache: dict[str, dict[str, int]], 
+        cache_name: str,
+        commit_time_cache: dict[str, int],
+        diff_cache: dict[str, dict[str, int]],
         child_cache: dict[str, set[str]],
         parent_cache: dict[str, set[str]]) -> None:
     cache_str = ""
@@ -119,7 +119,7 @@ def update_neighbors(commits: Optional[set[str]] = None) -> None:
             for line in lines:
                 parts = line.split()
                 cache[parts[0]] = set(parts[1:])
-        
+
         save_cache()
 
 
@@ -206,12 +206,14 @@ def fetch(repository: str = Configuration.WORKSPACE_PATH) -> bool:
     fetch_command = ["fetch", "--tags", "--prune", "origin"]
     fetch_output = get_git_output(fetch_command, include_err=True)
     if len(fetch_output) > 0:
+        print()
         print(fetch_output)
+        print()
         _cache_clear()
 
     if Configuration.WORKSPACE_PATH == repository:
         _already_fetched = True
-    
+
     return len(fetch_output) > 0
 
 
@@ -221,14 +223,14 @@ def get_last_fetch_time() -> int:
 
 
 def get_git_output(
-        args: list[str], 
-        include_err: bool = False, 
+        args: list[str],
+        include_err: bool = False,
         input_str: Optional[str] = None,
         repository: str = Configuration.WORKSPACE_PATH) -> str:
     try:
         command = ["git", "-C", repository] + args
         output_bytes = subprocess.check_output(
-            command, 
+            command,
             stderr=subprocess.STDOUT if include_err else None,
             input=input_str.encode("utf-8") if input_str is not None else None)
         output = output_bytes.decode("utf-8").strip()
@@ -252,7 +254,7 @@ def _get_all_relative_types(ref: str, relative_cache: dict[str, set[str]]) -> se
     seen = {commit}
     queue = deque([commit])
     while queue:
-        curr = queue.popleft()    
+        curr = queue.popleft()
         update_neighbors({curr})
         for parent in relative_cache[curr]:
             if parent not in seen:
@@ -285,7 +287,7 @@ def get_commit_times(refs: list[str]) -> dict[str, int]:
             else:
                 return {}
     return {
-        ref: _commit_time_cache[commit] 
+        ref: _commit_time_cache[commit]
         for ref, commit in ref_commits.items()
     }
 
@@ -295,7 +297,7 @@ def get_short_name(ref: str, plain: bool = False) -> str:
     commit = resolve_ref(ref)
     if len(commit) == 0:
         return ref if plain else terminal.color_bad(ref)
-    
+
     command = ["log", "--pretty=format:\"%h\"", commit, "-n", "1", "--abbrev-commit"]
     short_name = get_git_output(command)
     return short_name if plain else terminal.color_ref(short_name)
@@ -316,7 +318,7 @@ def resolve_ref(ref: str, fetch_if_missing: bool = False, use_cache: bool = True
         commit = _resolve_ref_uncached(ref)
 
     if fetch_if_missing and len(commit) == 0 and not _already_fetched:
-        print(f"Resolving \"{ref}\" failed, fetching in case it's too recent...")
+        print(terminal.warn(f"Resolving \"{ref}\" failed, fetching in case it's too recent..."))
         fetch()
         return resolve_ref(ref, False, use_cache)
     return commit
@@ -327,7 +329,7 @@ def _resolve_ref_uncached(ref: str) -> str:
     output = get_git_output(["rev-parse", "--revs-only", ref + "^{commit}"], include_err=True)
     ref_lines = [line.strip() for line in output.splitlines() if ref in line]
     if len(ref) > 0 and not ref.isdigit() and len(ref_lines) > 1:
-        print("Potentially ambiguous reference requested.")
+        print(terminal.error("Potentially ambiguous reference requested."))
         return ""
     return output
 
@@ -339,18 +341,18 @@ def _resolve_ref_cached(ref: str) -> str:
 
 # TODO the refs should be optional, empty string sentinels are ugly here
 def get_commit_list(
-        start_ref: str, 
-        end_ref: str, 
-        path_spec: Optional[str] = None, 
+        start_ref: str,
+        end_ref: str,
+        path_spec: Optional[str] = None,
         before: int = -1) -> list[str]:
     return list(_get_commit_list(start_ref, end_ref, path_spec, before))
 
 
 @functools.lru_cache
 def _get_commit_list(
-        start_ref: str, 
-        end_ref: str, 
-        path_spec: Optional[str] = None, 
+        start_ref: str,
+        end_ref: str,
+        path_spec: Optional[str] = None,
         before: int = -1) -> list[str]:
     command = ["rev-list", "--use-bitmap-index", "--reverse"]
     if before >= 0:
@@ -373,9 +375,9 @@ def _get_commit_list(
 
 
 def get_bounded_commits(
-        ancestor_refs: set[str], 
-        descendant_refs: set[str], 
-        path_spec: Optional[str] = None, 
+        ancestor_refs: set[str],
+        descendant_refs: set[str],
+        path_spec: Optional[str] = None,
         before: int = -1,
         ancestor_exclusive: bool = False,
         descendant_exclusive: bool = False) -> list[str]:
@@ -390,13 +392,13 @@ def get_bounded_commits(
             all_commits -= get_fn(commit)
         if not exclusive:
             all_commits |= commits
-        
+
     return [commit for commit in ordered_commits if commit in all_commits]
 
 
 def _get_interesting_counts(
-        interesting: set[str], 
-        forward_sets: dict[str, set[str]], 
+        interesting: set[str],
+        forward_sets: dict[str, set[str]],
         backward_sets: dict[str, set[str]],
         boundary_commits: set[str]) -> tuple[dict[str, int], dict[str, int]]:
     interesting_counts: dict[str, int] = {}
@@ -432,9 +434,9 @@ def _get_interesting_counts(
 
 
 def get_bisect_commits(
-        good_refs: set[str], 
-        bad_ref: str, 
-        path_spec: Optional[str] = None, 
+        good_refs: set[str],
+        bad_ref: str,
+        path_spec: Optional[str] = None,
         before: int = -1) -> list[str]:
     command = (
         ["rev-list", "--use-bitmap-index", "--bisect-all", bad_ref]
@@ -451,7 +453,7 @@ def get_bisect_commits(
 def get_bisect_steps_from_remaining(remaining: int) -> float:
     if remaining <= 0:
         return 0
-    
+
     steps = 0
     while True:
         if remaining == 3:
@@ -465,9 +467,9 @@ def get_bisect_steps_from_remaining(remaining: int) -> float:
 
 
 def get_bisect_commits_with_compile_counts(
-        good_refs: set[str], 
-        bad_refs: set[str], 
-        path_spec: Optional[str] = None, 
+        good_refs: set[str],
+        bad_refs: set[str],
+        path_spec: Optional[str] = None,
         boundary_commits: set[str] = set(),
         before: int = -1) -> list[tuple[str, float]]:
     import time
@@ -482,7 +484,7 @@ def get_bisect_commits_with_compile_counts(
         return [
             (commit, -1) for commit in interesting_commit_list
         ]
-    
+
     interesting_commits = set(interesting_commit_list)
     start_time = time.time()
     descendant_interesting_counts, descendant_culled_counts = _get_interesting_counts(
@@ -506,7 +508,7 @@ def get_bisect_commits_with_compile_counts(
             interesting_compiles[commit] = get_bisect_steps_from_remaining(
                 len(interesting_commits) - 1 - culled_counts[commit]
             )
-    
+
     scored_commits = []
     for commit in interesting_commits:
         score = min(ancestor_interesting_counts[commit], descendant_interesting_counts[commit])
@@ -544,7 +546,7 @@ def is_ancestor(possible_ancestor_ref: str, possible_descendant_ref: str) -> boo
 def get_diff_size(commit_src: str, commit_dst: str) -> int:
     if commit_src > commit_dst:
         commit_src, commit_dst = commit_dst, commit_src
-    
+
     for cache in (_diff_precache, _diff_cache):
         if commit_src in cache:
             if commit_dst in cache[commit_src]:
@@ -570,9 +572,10 @@ def _get_diff_size(ref_src: str, ref_dst: str) -> int:
     try:
         output_parts = output.split()
         if len(output_parts) < 4:
-            print("Unexpected internal error, please report: bad parts", output_parts)
+            print(terminal.error("please report: bad parts", "UNEXPECTED INTERNAL ERROR"),
+                output_parts)
             return 0
-        
+
         retval = int(output_parts[3])
         if len(output_parts) >= 6:
             retval = max(retval, int(output_parts[5]))
@@ -583,9 +586,9 @@ def _get_diff_size(ref_src: str, ref_dst: str) -> int:
 
 def minimal_parents(parents: set[str]) -> set[str]:
     return {
-        commit for commit in parents 
+        commit for commit in parents
         if all(
-            not is_ancestor(test_commit, commit) 
+            not is_ancestor(test_commit, commit)
             for test_commit in parents if commit != test_commit
         )
     }
@@ -595,7 +598,7 @@ def minimal_children(children: set[str]) -> set[str]:
     return {
         commit for commit in children
         if all(
-            not is_ancestor(commit, test_commit) 
+            not is_ancestor(commit, test_commit)
             for test_commit in children if commit != test_commit
         )
     }

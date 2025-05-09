@@ -56,7 +56,7 @@ def get_github_number(flexible_arg: str) -> tuple[int, bool]:
     flexible_arg = flexible_arg.strip().lower()
     if flexible_arg.endswith(".zip"):
         return -1, False
-    
+
     for base_url, is_issue in [(ISSUES_URL, True), (PULLS_URL, False)]:
         if base_url in flexible_arg:
             flexible_arg = flexible_arg[flexible_arg.index(base_url) + len(base_url):]
@@ -71,7 +71,7 @@ def get_github_number(flexible_arg: str) -> tuple[int, bool]:
                 else:
                     break
             return int(number), is_issue
-        
+
     if flexible_arg.startswith("#"):
         flexible_arg = flexible_arg[1:]
     if flexible_arg.isdigit():
@@ -215,7 +215,7 @@ def set_project_title(project_file: str, title: str, prepend_existing: bool = Fa
 def find_project_file(folder: str, silent: bool = False) -> Optional[str]:
     if folder.endswith("project.godot"):
         return folder if os.path.exists(folder) else None
-    
+
     project_files = []
     all_files_prefix = None
     for root, _, files in os.walk(folder):
@@ -242,14 +242,14 @@ def find_project_file(folder: str, silent: bool = False) -> Optional[str]:
             "Invalid choice. Please enter a valid number or \"n\" [1]: ",
             set([str(i + 1) for i in range(len(project_files))] + ["none"]),
             default="1")
-        
+
         if choice.startswith("n"):
             return None
         return project_files[int(choice) - 1]
-    
+
     elif len(project_files) == 1:
         return project_files[0]
-    
+
     print("No project.godot file found in the project folder.")
     response = input("Would you like to create a new one? [Y/n]: ").strip().lower()
     if response.startswith("n"):
@@ -311,9 +311,9 @@ def create_project_file(location: str) -> str:
 
 
 def create_project(
-        project_name: str = "", 
-        issue_number: int = -1, 
-        title: Optional[str] = None, 
+        project_name: str = "",
+        issue_number: int = -1,
+        title: Optional[str] = None,
         force: bool = False) -> str:
     if project_name == "":
         if issue_number != -1:
@@ -386,7 +386,7 @@ def export_project(project_name: str, export_path: str, title: Optional[str] = N
                 f.write(file_path, os.path.relpath(file_path, project_folder))
     return True
 
-    
+
 def get_mrp(issue: int) -> str:
     if issue == -1:
         print("Execution parameters request a {PROJECT} but no project or issue was provided.")
@@ -409,11 +409,11 @@ def get_mrp(issue: int) -> str:
                 project_file = find_project_file(folder_name)
                 return project_file if project_file is not None else ""
             return zip_filename
-            
+
     print("Attempting to find projects in the issue.")
     zip_links, body_links_len = get_zip_links_from_issue(issue)
 
-    if len(zip_links) > 0:        
+    if len(zip_links) > 0:
         print("Zip file(s) found in issue. Please select an option.")
         for i, link in enumerate(zip_links):
             body_info = ""
@@ -427,7 +427,7 @@ def get_mrp(issue: int) -> str:
             "Invalid choice. Please enter a valid number or \"c\" [1]: ",
             set([str(i + 1) for i in range(len(zip_links))] + ["create", "none"]),
             default="1")
-        
+
         if choice == "none":
             return ""
         if choice != "create":
@@ -435,7 +435,7 @@ def get_mrp(issue: int) -> str:
             if download_project(zip_link, str(issue)):
                 return find_project_file(get_project_path(str(issue)))
             return ""
-        
+
     else:
         print(f"No MRP found in issue #{issue}.")
         response = input("Would you like to create a blank project to use? [Y/n]: ")
@@ -446,9 +446,9 @@ def get_mrp(issue: int) -> str:
 
 
 def _get_menu_choice(
-        prompt: str, 
-        error_prompt: str, 
-        valid_choices: set[str], 
+        prompt: str,
+        error_prompt: str,
+        valid_choices: set[str],
         default: Optional[str] = None) -> str:
     choice = input(prompt)
     while True:

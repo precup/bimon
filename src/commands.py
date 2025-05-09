@@ -38,8 +38,8 @@ def init_command() -> None:
 
 
 def update_command(
-        n: Optional[int], 
-        cursor_ref: Optional[str], 
+        n: Optional[int],
+        cursor_ref: Optional[str],
         update_ranges: Optional[list[str]]) -> None:
     git.load_cache()
     signal_handler.install()
@@ -65,7 +65,7 @@ def update_command(
     if len(missing_commits) == 0:
         print("All the requested commits are already cached or ignored.")
         sys.exit(0)
-    
+
     cut = commit_list.index(cursor_commit)
     if cut < 0:
         print(f"The cursor commit {cursor_commit} was not in the commit range(s).")
@@ -90,11 +90,11 @@ def run_command(
         cached_only: bool=False) -> None:
     _handle_autoclean()
     execution_args, project, _, commit, _, _ = _parse_flexible_args(
-        flexible_args, 
-        execution_args, 
-        project=project, 
-        issue=issue, 
-        single_ref_mode=True, 
+        flexible_args,
+        execution_args,
+        project=project,
+        issue=issue,
+        single_ref_mode=True,
         ref=ref)
     present_versions = storage.get_present_versions()
     ignored_commits = storage.get_ignored_commits()
@@ -127,13 +127,13 @@ def run_command(
                   + " Continuing anyway.")
 
     success = execution.launch(
-        ref=commit, 
-        execution_args=execution_args, 
-        present_versions=present_versions, 
-        discard=discard, 
-        cached_only=False, 
+        ref=commit,
+        execution_args=execution_args,
+        present_versions=present_versions,
+        discard=discard,
+        cached_only=False,
         wd=project)
-    
+
     if not success:
         sys.exit(1)
 
@@ -155,25 +155,25 @@ def bisect_command(
         git.fetch()
 
     execution_args, project, issue_number, _, goods, bads = _parse_flexible_args(
-        flexible_args, 
-        execution_args, 
-        project=project, 
-        issue=issue, 
-        single_ref_mode=False, 
+        flexible_args,
+        execution_args,
+        project=project,
+        issue=issue,
+        single_ref_mode=False,
         ref_range=ref_range)
-    
+
     issue_time = -1
     if issue_number >= 0 and not ignore_date:
         issue_time = project_manager.get_approx_issue_creation_time(issue_number)
 
     bisector = bisect.Bisector(
-        discard=discard, 
-        cached_only=cached_only, 
-        execution_args=execution_args, 
-        path_spec=path_spec, 
-        end_timestamp=issue_time, 
-        wd=project, 
-        initial_goods=goods, 
+        discard=discard,
+        cached_only=cached_only,
+        execution_args=execution_args,
+        path_spec=path_spec,
+        end_timestamp=issue_time,
+        wd=project,
+        initial_goods=goods,
         initial_bads=bads)
 
     print("Entering bisect interactive mode. Type \"help\" for a list of commands.")
@@ -235,7 +235,7 @@ def extract_command(ref: str, folder: Optional[str]) -> None:
     if version == "":
         print(f"Invalid ref: {ref} could not be resolved.")
         sys.exit(1)
-    
+
     if folder is None:
         folder = storage.get_version_folder(version)
     else:
@@ -246,14 +246,14 @@ def extract_command(ref: str, folder: Optional[str]) -> None:
 
 
 def clean_command(
-        projects: Optional[bool], 
-        duplicates: Optional[bool], 
-        caches: Optional[bool], 
-        temp_files: Optional[bool], 
-        loose_files: Optional[bool], 
+        projects: Optional[bool],
+        duplicates: Optional[bool],
+        caches: Optional[bool],
+        temp_files: Optional[bool],
+        loose_files: Optional[bool],
         build_artifacts: Optional[bool],
         dry_run: bool = False) -> None:
-    if not projects and not duplicates and not caches and not temp_files and not loose_files and not build_artifacts:
+    if not (projects or duplicates or caches or temp_files or loose_files or build_artifacts):
         print("No options provided, nothing to be done.")
         return
 
@@ -274,7 +274,7 @@ def clean_command(
         clean_count += execution.delete_cache(dry_run)
     if loose_files:
         clean_count += storage.clean_loose_files(dry_run)
-    
+
     if not build_artifacts or clean_count > 0:
         print(f"Purged {clean_count} items.")
 
@@ -326,13 +326,13 @@ def write_precache_command() -> None:
 
 
 def help_command(
-        help_messages: list[tuple[str, str, str]], 
-        command_prefix: Optional[str], 
+        help_messages: list[tuple[str, str, str]],
+        command_prefix: Optional[str],
         aliases: dict[str, list[str]] = {}) -> None:
     if command_prefix is None:
         command_prefix = ""
     command_prefix = command_prefix.lower().strip()
-    
+
     should_pad = False
     for key_command, _, help_message in help_messages:
         for alias in aliases.get(key_command, []) + [key_command]:
@@ -394,10 +394,10 @@ def _get_missing_commits(commit_list: list[str], n: int) -> list[str]:
 
 
 def _exit_if_duplicate(
-        item: Optional[str|int], 
-        item_internal: Optional[str], 
-        typename: str, 
-        who_knows: str, 
+        item: Optional[str|int],
+        item_internal: Optional[str],
+        typename: str,
+        who_knows: str,
         reason: str = "") -> None:
     article = "an" if typename.startswith("i") else "a"
     prefix = f"flexible_args detected {article} {typename} \"{who_knows}\" passed to it"
@@ -432,7 +432,7 @@ def _determine_flexible_args(
             print(f"Invalid range: {bad_commit} is an ancestor of known good commit.")
             sys.exit(1)
         bads.add(bad_commit)
-    
+
     def add_range(ref_range: str) -> None:
         start_commit, end_commit = _get_range_parts(ref_range, allow_empty=True)
         if start_commit != "":
@@ -507,7 +507,7 @@ def _determine_flexible_args(
             ref = ref_flexible
     if issue is not None:
         issue_number = project_manager.get_issue_number(issue)
-    
+
     return project, issue_number, ref, goods, bads
 
 
@@ -530,11 +530,11 @@ def _parse_flexible_args(
         ref_range = None
 
     project, issue_number, ref, goods, bads = _determine_flexible_args(
-        flexible_args, 
-        single_ref_mode=single_ref_mode, 
-        project=project, 
-        issue=issue, 
-        ref=ref, 
+        flexible_args,
+        single_ref_mode=single_ref_mode,
+        project=project,
+        issue=issue,
+        ref=ref,
         ref_range=ref_range)
 
     commit = None
@@ -593,9 +593,9 @@ def _parse_flexible_args(
 
 
 def _get_range_error(
-        start_ref: str, 
-        end_ref: str, 
-        allow_empty: bool, 
+        start_ref: str,
+        end_ref: str,
+        allow_empty: bool,
         allow_nonancestor: bool = False) -> Optional[str]:
     start_ref = start_ref.strip()
     if start_ref == "":
@@ -625,8 +625,8 @@ def _get_range_error(
 
 
 def _get_range_parts(
-        ref_range: str, 
-        allow_empty: bool = False, 
+        ref_range: str,
+        allow_empty: bool = False,
         allow_nonancestor: bool = False) -> tuple[str, str]:
     if ref_range.count("..") != 1:
         print("Range must be in the format \"start_ref..end_ref\".")
@@ -648,7 +648,7 @@ def _get_commit_list_from_ranges(ref_ranges: Optional[list[str]]) -> list[str]:
     parsed_ranges = []
     for update_range in ref_ranges:
         parsed_ranges.append(_get_range_parts(update_range, allow_empty=True))
-        
+
     commit_list = []
     seen = set()
     for start, end in parsed_ranges:
@@ -660,5 +660,5 @@ def _get_commit_list_from_ranges(ref_ranges: Optional[list[str]]) -> list[str]:
     if len(commit_list) == 0:
         print("Invalid range: there were no commits found in the update range(s).")
         sys.exit(1)
-    
+
     return commit_list

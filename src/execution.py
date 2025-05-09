@@ -34,11 +34,11 @@ def _mark_used(commit: str) -> None:
 
 
 def launch(
-        ref: str, 
-        execution_arguments: str, 
-        present_versions: set[str], 
-        discard: bool, 
-        cached_only: bool, 
+        ref: str,
+        execution_arguments: str,
+        present_versions: set[str],
+        discard: bool,
+        cached_only: bool,
         wd: str = "") -> bool:
     return launch_with_automation(
         ref,
@@ -50,11 +50,11 @@ def launch(
 
 
 def launch_with_automation(
-        ref: str, 
-        execution_arguments: str, 
-        present_versions: set[str], 
-        discard: bool, 
-        cached_only: bool, 
+        ref: str,
+        execution_arguments: str,
+        present_versions: set[str],
+        discard: bool,
+        cached_only: bool,
         wd: str = "",
         automate_good: Optional[str] = None,
         automate_good_regex: Optional[re.Pattern] = None,
@@ -73,15 +73,15 @@ def launch_with_automation(
             print(f"Commit {git.get_short_name(commit)} is not cached."
                 + " Skipping due to --cached-only.")
             return "error"
-            
+
         if not factory.compile_uncached(commit):
             print(f"Failed to compile commit {git.get_short_name(commit)}.")
             return "error"
 
         if discard:
             return _launch_folder(
-                Configuration.WORKSPACE_PATH, 
-                execution_arguments, 
+                Configuration.WORKSPACE_PATH,
+                execution_arguments,
                 wd,
                 automate_good,
                 automate_good_regex,
@@ -90,19 +90,19 @@ def launch_with_automation(
                 automate_crash,
                 automate_exit,
                 automate_script)
-        
+
         if not factory.cache():
             return "error"
         present_versions.add(commit)
-        
+
     if not storage.extract_version(commit):
         print(f"Failed to extract commit {git.get_short_name(commit)}.")
         return "error"
-    
+
     _mark_used(commit)
     return _launch_folder(
-        storage.get_version_folder(commit), 
-        execution_arguments, 
+        storage.get_version_folder(commit),
+        execution_arguments,
         wd,
         automate_good,
         automate_good_regex,
@@ -114,8 +114,8 @@ def launch_with_automation(
 
 
 def _find_executable(
-        base_folder: str, 
-        likely_location: str, 
+        base_folder: str,
+        likely_location: str,
         backup_path_regex: str) -> Optional[str]:
     likely_location = os.path.join(base_folder, likely_location)
     if os.path.exists(likely_location):
@@ -132,8 +132,8 @@ def _find_executable(
 
 
 def _launch_folder(
-        workspace_path: str, 
-        execution_arguments: str, 
+        workspace_path: str,
+        execution_arguments: str,
         wd: str,
         automate_good: Optional[str],
         automate_good_regex: Optional[re.Pattern],
@@ -156,7 +156,7 @@ def _launch_folder(
 
     return terminal.execute_in_subwindow_with_automation(
         command=command,
-        title="godot", 
+        title="godot",
         rows=Configuration.SUBWINDOW_ROWS,
         eat_kill=True,
         cwd=wd,

@@ -7,6 +7,7 @@ from typing import Optional
 from pyzstd import CParameter, DParameter, ZstdFile
 
 from src import git
+from src import terminal
 from src.config import Configuration
 from src.pooled_executor import PooledExecutor
 
@@ -100,7 +101,7 @@ def _read_bundle_map() -> dict[str, str]:
 
 def get_present_versions() -> set[str]:
     return (
-        {version for version in os.listdir(_VERSIONS_DIR) 
+        {version for version in os.listdir(_VERSIONS_DIR)
         if git.resolve_ref(version) == version}
         | set(_read_bundle_map().keys())
     )
@@ -138,7 +139,8 @@ def _extract_version(version: str, target: str) -> bool:
     if not os.path.exists(version_path):
         bundle_id = _read_bundle_map().get(version)
         if bundle_id is None:
-            print(f"Extraction failed, version {version} not found in storage.")
+            version = terminal.color_ref(version)
+            print(terminal.error(f"Extraction failed, version {version} not found in storage."))
             return False
 
         if not _extract_with_zstd(os.path.join(_VERSIONS_DIR, bundle_id), version, _VERSIONS_DIR):
@@ -149,7 +151,7 @@ def _extract_version(version: str, target: str) -> bool:
 
 
 def clean_duplicate_files(
-        protected_versions: set[str] = set(), 
+        protected_versions: set[str] = set(),
         dry_run: bool = False,
         keep_count: int = 0) -> int:
     clean_count = 0
@@ -162,11 +164,11 @@ def clean_duplicate_files(
     for version in versions_to_clean:
         version_path = os.path.join(_VERSIONS_DIR, version)
         if dry_run:
-            print(f"Would remove {version_path}")
+            print(f"Would delete {version_path}")
             clean_count += get_recursive_file_count(version_path)
         else:
             if Configuration.PRINT_MODE == Configuration.PrintMode.VERBOSE:
-                print(f"Removing {version_path}")
+                print(f"Deleting {version_path}")
             clean_count += rm(version_path)
     return clean_count
 
@@ -186,13 +188,13 @@ def _compress_with_zstd_by_name(paths: dict[str, str], output_path: str) -> bool
         # Defending just in case since it's very bad to allow.
         bundle_map = _read_bundle_map()
         output_filename = os.path.basename(output_path)
+        col_filename = terminal.color_ref(output_filename)
         if output_filename in bundle_map.values():
-            print("Recoverable internal error, please report:")
-            print(f"Archive {output_filename} has already been added.")
-            print("This should never occur. Skipping.")
+            print(terminal.error(f"Archive {col_filename} has already been added."))
+            print(terminal.error("This should never occur, please report. Skipping."))
             return False
         else:
-            print(f"Archive {output_filename} already exists, but seems invalid. Overwriting.")
+            print(f"Archive {col_filename} already exists, but seems invalid. Overwriting.")
             rm(output_path)
     try:
         with ZstdTarFile(output_path, mode="w") as tar:
@@ -200,7 +202,7 @@ def _compress_with_zstd_by_name(paths: dict[str, str], output_path: str) -> bool
                 tar.add(input_path, arcname=arcname)
         return True
     except Exception as e:
-        print(f"Compression failed with error: {e}")
+        print(terminal.error(f"Compression failed with error: {e}"))
         return False
 
 
@@ -265,7 +267,7 @@ def compress_bundle(bundle_id: str, bundle: list[str]) -> bool:
 def get_unbundled_versions() -> list[str]:
     bundle_map = _read_bundle_map()
     return [
-        path for path in os.listdir(_VERSIONS_DIR) 
+        path for path in os.listdir(_VERSIONS_DIR)
         if path not in bundle_map and git.resolve_ref(path) == path
     ]
 
@@ -338,7 +340,7 @@ def clean_loose_files(dry_run: bool = False) -> int:
     loose_files = set(os.listdir(_VERSIONS_DIR))
     loose_files -= set(_read_bundle_map().values())
     loose_files = {
-        file for file in loose_files 
+        file for file in loose_files
         if len(file) != 40 or not all(c in string.hexdigits for c in file)
     }
     cleaned = 0
@@ -368,5 +370,5 @@ def get_mru(commits: set[str], max_count: int) -> list[str]:
             break
         if commit in commits:
             mru.append(commit)
-    
+
     return mru

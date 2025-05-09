@@ -74,14 +74,14 @@ class Configuration:
         Configuration.COLOR_ENABLED = config.getboolean(
             "Output", "color_enabled")
 
-        Configuration.MESSAGE_COLOR = config.get(
-            "Output", "message_color")
+        Configuration.LOG_COLOR = config.get(
+            "Output", "log_color")
         Configuration.IMPORTANT_COLOR = config.get(
             "Output", "important_color")
-        Configuration.REFERENCE_COLOR = config.get(
-			"Output", "reference_color")
-        Configuration.GOOD_COLOR = config.get(
-			"Output", "good_color")
+        Configuration.COMMIT_COLOR = config.get(
+			"Output", "commit_color")
+        Configuration.SUCCESS_COLOR = config.get(
+			"Output", "success_color")
         Configuration.ERROR_COLOR = config.get(
 			"Output", "error_color")
         Configuration.WARNING_COLOR = config.get(

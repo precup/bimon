@@ -69,7 +69,7 @@ _ANSI_BG_COLOR_MAP = {
     "cyan": "0;106",
     "white": "0;107",
     "dark black": "0;40",
-    "dark red": "0;41", 
+    "dark red": "0;41",
     "dark green": "0;42",
     "dark yellow": "0;43",
     "dark blue": "0;44",
@@ -180,7 +180,7 @@ def _process_process_output(process: PtyProcess, output_lines: list[str], cols: 
     stdout_chunk = process.read(1024)
     if len(stdout_chunk) == 0:
         return False
-    
+
     lines = stdout_chunk.split("\n")
     if len(lines) == 1:
         old_lines = split_to_display_lines(output_lines[-1], cols)
@@ -196,11 +196,11 @@ def _process_process_output(process: PtyProcess, output_lines: list[str], cols: 
 
 
 def _print_subwindow_lines(
-        output_lines: list[str], 
-        ansi_codes_seen: set[str], 
-        cols: int, 
-        rows: int, 
-        top: str, 
+        output_lines: list[str],
+        ansi_codes_seen: set[str],
+        cols: int,
+        rows: int,
+        top: str,
         bottom: str,
         prev_lines_printed: int) -> int:
     window_lines: list[tuple[list[str], str]] = []
@@ -217,14 +217,14 @@ def _print_subwindow_lines(
 
     lines_printed = max(1, len(window_lines))
     center = "\n".join(
-        ANSI_CLEAR_LINE + "".join(ansi_stack) + line_text 
+        ANSI_CLEAR_LINE + "".join(ansi_stack) + line_text
         for ansi_stack, line_text in window_lines
     )
     ansi_codes_seen.update({match.group() for match in _ANSI_ESCAPE.finditer(center)})
     output = (
-        (f"\033[{prev_lines_printed}A\r" if prev_lines_printed > 0 else "") 
-        + ANSI_RESET + top + "\n" 
-        + center + ANSI_RESET + "\n" 
+        (f"\033[{prev_lines_printed}A\r" if prev_lines_printed > 0 else "")
+        + ANSI_RESET + top + "\n"
+        + center + ANSI_RESET + "\n"
         + bottom + "\r\033[1A"
     )
     print(output, end="", flush=True)
@@ -232,10 +232,10 @@ def _print_subwindow_lines(
 
 
 def _execute_in_subwindow_pty(
-        command: list[str], 
-        title: str, 
-        rows: int, 
-        cwd: Optional[str], 
+        command: list[str],
+        title: str,
+        rows: int,
+        cwd: Optional[str],
         eat_kill: bool,
         automate_good: Optional[str],
         automate_good_regex: Optional[re.Pattern],
@@ -288,8 +288,15 @@ def _execute_in_subwindow_pty(
                 print(move_rows_up(1), end="\r", flush=True)
             else:
                 print()
-        
-        _print_subwindow_lines(output_lines, ansi_codes_seen, cols, rows, top, bottom, lines_printed)
+
+        _print_subwindow_lines(
+            output_lines,
+            ansi_codes_seen,
+            cols,
+            rows,
+            top,
+            bottom,
+            lines_printed)
 
     process.wait()
     if lines_printed > 0:
@@ -306,7 +313,9 @@ def _execute_in_subwindow_pty(
         if automate_crash is not None:
             return automate_crash
         print("Dumping full process log because an error occurred:")
+        print(color_bad("-" * cols))
         print("\n".join(output_lines))
+        print(color_bad("-" * cols))
         return "error"
 
 
@@ -339,10 +348,10 @@ def execute_in_subwindow_with_automation(
 
     if Configuration.PRINT_MODE == PrintMode.LIVE:
         return _execute_in_subwindow_pty(
-            command, 
-            title, 
-            rows, 
-            cwd, 
+            command,
+            title,
+            rows,
+            cwd,
             eat_kill,
             automate_good,
             automate_good_regex,
@@ -379,9 +388,9 @@ def _execute_directly(
     else:
         stdout = subprocess.DEVNULL
         stderr = subprocess.DEVNULL
-    
+
     process_output = False
-    if (automate_good is not None or automate_good_regex is not None or 
+    if (automate_good is not None or automate_good_regex is not None or
         automate_bad is not None or automate_bad_regex is not None):
         stdout = subprocess.PIPE
         stderr = subprocess.STDOUT
@@ -408,7 +417,7 @@ def _execute_directly(
                     automate_good_regex,
                     automate_bad,
                     automate_bad_regex)
-                
+
                 if mark is not None and process.isalive():
                     process.kill(signal.SIGINT)
         finally:
@@ -432,10 +441,10 @@ def _execute_directly(
 
 
 def execute_in_subwindow(
-        command: list[str], 
-        title: str, 
-        rows: int, 
-        cwd: Optional[str] = None, 
+        command: list[str],
+        title: str,
+        rows: int,
+        cwd: Optional[str] = None,
         eat_kill: bool = False) -> bool:
     return execute_in_subwindow_with_automation(
         command=command,
@@ -447,7 +456,7 @@ def execute_in_subwindow(
 
 def split_to_display_lines(text: str, columns: int) -> list[tuple[list[str], str]]:
     # Returns a list of tuples, where each tuple is a list of ANSI codes and a line
-    # The list of ANSI codes is the stack of codes that are currently active at the 
+    # The list of ANSI codes is the stack of codes that are currently active at the
     # start of the line
     if text == "":
         return [([], "")]
@@ -609,8 +618,8 @@ def histogram_color(fractions: list[float]) -> str:
             color_index += 1
         blend_index = min(len(colors) - 1, int(color_index) + 1)
         bucket_color = _blend_colors(
-            colors[int(color_index)], 
-            colors[blend_index], 
+            colors[int(color_index)],
+            colors[blend_index],
             color_index % 1)
         output += color(_C437_HEIGHT_PARTS[-1], bucket_color)
     return output
@@ -628,7 +637,7 @@ def color(text: str, color_str: str) -> str:
     elif color_str in _ANSI_COLOR_MAP:
         color_str = _ANSI_COLOR_MAP[color_str]
     else:
-        print(f"Recoverable internal error: unknown color {color_str} requested.")
+        print(error(f"unknown color {color_str} requested."))
         return text
     return _color_by_code(text, color_str)
 
@@ -641,7 +650,7 @@ def color_bg(text: str, color_str: str) -> str:
     elif color_str in _ANSI_BG_COLOR_MAP:
         color_str = _ANSI_BG_COLOR_MAP[color_str]
     else:
-        print(f"Recoverable internal error: unknown color {color_str} requested.")
+        print(error(f"unknown color {color_str} requested."))
         return text
     return _color_by_code(text, color_str)
 
@@ -652,25 +661,29 @@ def _color_by_code(text: str, color_code: str) -> str:
     return f"\033[{color_code}m{text}" + ANSI_RESET
 
 
+def color_good(text: str) -> str:
+    return color(text, Configuration.SUCCESS_COLOR)
+
+
 def color_bad(text: str) -> str:
     return color(text, Configuration.ERROR_COLOR)
 
 
-def color_good(text: str) -> str:
-    return color(text, Configuration.GOOD_COLOR)
-
-
 def color_ref(text: str) -> str:
-    return color(text, Configuration.REFERENCE_COLOR)
+    return color(text, Configuration.COMMIT_COLOR)
 
 
 def color_key(text: str) -> str:
     return color(text, Configuration.IMPORTANT_COLOR)
 
 
-def warn(text: str) -> str:
-    return color("[WARNING]", Configuration.WARNING_COLOR) + " " + text
+def color_log(text: str) -> str:
+    return color(text, Configuration.LOG_COLOR)
 
 
-def error(text: str) -> str:
-    return color("[ERROR]", Configuration.ERROR_COLOR) + " " + text
+def warn(text: str, prefix: str = "WARNING") -> str:
+    return color(f"[{prefix}]", Configuration.WARNING_COLOR) + " " + text
+
+
+def error(text: str, prefix: str = "ERROR") -> str:
+    return color(f"[{prefix}]", Configuration.ERROR_COLOR) + " " + text

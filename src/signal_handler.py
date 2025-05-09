@@ -25,7 +25,7 @@ def _thread_print(message: str) -> None:
         print(message)
     except RuntimeError:
         # This may happen if the interrupt is received
-        # while in the middle of a print call since 
+        # while in the middle of a print call since
         # print does not allow re-entrance
         # TODO: Inform the user somehow anyways
         pass

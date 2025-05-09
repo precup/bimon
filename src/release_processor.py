@@ -2,6 +2,7 @@ import json
 import os
 
 from src import git
+from src import terminal
 from src.config import Configuration
 
 _RELEASES_FOLDER = os.path.join(Configuration.SECONDARY_WORKSPACE_PATH, "releases")
@@ -10,7 +11,7 @@ _RELEASES_FOLDER = os.path.join(Configuration.SECONDARY_WORKSPACE_PATH, "release
 def add_any_new_release_tags(force: bool = False) -> None:
     if not force and not git.fetch(repository=Configuration.SECONDARY_WORKSPACE_PATH):
         return
-    
+
     releases = _get_releases()
     if len(releases) > 0:
         tags = {}
@@ -19,11 +20,11 @@ def add_any_new_release_tags(force: bool = False) -> None:
                 continue
             resolved = git.resolve_ref(releases[i][1])
             if resolved == "":
-                print(f"[WARNING] Release {releases[i][0]} points to a"
-                    + " commit that no longer exists. Can't add tag.")
+                print(terminal.warn(f"Release {terminal.color_ref(releases[i][0])} points to a"
+                    + " commit that no longer exists. Can't add tag."))
             else:
                 tags[releases[i][0]] = resolved
-            
+
         git.add_tags(tags)
 
 
