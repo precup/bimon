@@ -1,22 +1,16 @@
 # BiMon
 BiMon is a tool for speeding up bug triage for the Godot engine bugsquad. It has some nice convenience features, but the main focus is its ability to precompile and cache Godot binaries for use in later bisects.
 
-Compiling repeatedly during bisection is inefficient even on a fairly beefy computer. For many bugs, actually checking whether a commit is good or bad once the project is built takes a matter of seconds, and so even if compilation were 10x faster than on my machine it would still be a large fraction of the time spent.
-
-The answer is straightforward: precompile commits when you're not bisecting so you can skip that time when you are.
-
 ### How many commits get precompiled?
-You can precompile 1 in every N commits (or every commit) across whatever ranges you choose. You can also mix and match the two as you like.
-I initially did a 1 in 128 pass to cut down the number of compiles a bit and then did a full pass from 4.5-dev1 back to 4.0-stable. The first pass produced ~120 versions, the second ~20,000 versions. Doing a hybrid where you do 1 in N for a longer time range and every commit for the last version or so also works well; I did that on a second machine.
+You can precompile whatever ranges you choose, every commit or 1 out of every N commits. You can also mix and match the two as you like.
+I initially did a 1 in 128 pass to cut down the number of compiles a bit and then did a full pass from 4.5-dev1 back to 4.0-stable. The first pass produced ~120 versions, the second ~20,000 versions. Doing a hybrid where you do 1 in N for a longer time range and every commit for the last minor version or so also works well; I did that on a second machine.
 
 ### What's the performance like?
 **TL;DR: I'm averaging 37 seconds and 7.8 MB per version.** A clean build with no flags takes 9 minutes for me, for reference.
 
 I wanted to be able to cover everything back to the last major release, which at the moment is 20,000 versions. If you're more reasonable and only go back to the previous minor version, this won't be as much of a concern.
 
- Compiling and storing 20,000 versions of Godot seems a bit ludicrous at first glance. However, there are a couple things working in our favor:
-- Very similar commits build very quickly
-- Very similar commits have a lot of overlap that compresses extremely well
+ Compiling and storing 20,000 versions of Godot seems a bit ludicrous at first glance. However, similar commits build very quickly and have a lot of overlap that compresses extremely well.
 
 When I first started looking into this, my clean builds were taking 9 minutes. The current official Linux build is compressed to about 58 MB. Multiplying those by 20k gives you 140 days and 1.2 TB, neither of which are acceptable. 
 
@@ -24,8 +18,8 @@ However, reality is much kinder, for once. With the right flags and incremental 
 
 1 in N passes have significantly worse performance on both speed and size because the commits are less similar, so it's hard to justify for small N (<= 8) compared to just compiling everything.
 
-### What else does it do?
-Once you have your commits prebuilt, BiMon manages your actual bisections for you by wrapping around git. The interactive bisect mode handles extracting and launching cached commits for you and prioritizes those to narrow down the range as much as possible first. When versions do need to be compiled, it also handles that for you. This is a very similar process to bisecting with git normally, but with a lot more automation around building and running Godot. There are also options that can be used to automate bisection by marking commits automatically if they print certain output or crash.
+### How do I use the precompiled commits?
+Once you have your commits prebuilt, BiMon manages your actual bisections for you by wrapping around git. The interactive bisect mode handles extracting and launching cached commits for you and prioritizes those to narrow down the range as much as possible first. This is a very similar process to bisecting with git normally, but with a lot more automation around building and running Godot. There are also options that can be used to automate bisection by marking commits automatically if they print certain output or crash.
 
 BiMon also supports running individual versions if you're just trying to reproduce a bug instead of bisect it. 
 
@@ -197,56 +191,6 @@ Bisection proceeds in two phases, where the range is first narrowed down as much
 > - `automate` calls overwrite each other
 
 ## TODO
-Fun
-    Make output prettier
-
-Testing!!!
-    main flags
-        color
-        config
-        q
-        v
-        l
-        i
-    compress
-        compress some
-        compress all
-    ignored_commits
-    create
-        with and without title, usable in run
-    export
-        with and without title
-
-    update
-    run
-        testing PRs
-    bisect
-    clean
-    help
-    compile
-    extract
-
-    bisect
-        combining marking commands
-        full bisect
-        skip
-        unmark
-        weird combinations of good/bad
-        automate
-        pause
-        exit/quit
-        run
-        list
-        status
-        set-params
-        help
-    
-    config options
-
-
-enable autoclean once I've tested clean
-unmark is kinda broken
-update other configs to match line length changes
 
 #### Known Issues
 - Occassionally gets stuck when running a subprocess in live mode on Windows, proceeds after any input
