@@ -371,7 +371,6 @@ class Bisector:
                 return Bisector.CommandResult.ERROR
             commits.append(commit)
 
-        result = Bisector.CommandResult.SUCCESS
         for i, commit in enumerate(commits):
             if commit in self._old_error_commits:
                 print(terminal.warn("That commit has had compiler errors in the past."
@@ -381,9 +380,10 @@ class Bisector:
             self._current_commit = commit
             if i == len(commits) - 1:
                 self.queue_decompress_nexts()
-            if self._launch(single_launch=i < len(commits) - 1) == Bisector.CommandResult.ERROR:
-                result = Bisector.CommandResult.ERROR
-        return result
+            launch_result = self._launch(single_launch=i < len(commits) - 1)
+            if launch_result != Bisector.CommandResult.SUCCESS:
+                return launch_result
+        return Bisector.CommandResult.SUCCESS
 
 
     def list_command(self, short: bool, best: bool) -> CommandResult:
