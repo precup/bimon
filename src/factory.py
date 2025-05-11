@@ -44,14 +44,14 @@ def compress(
     for i, bundle in enumerate(bundles):
         start_time = time.time()
         bundle_id = bundle[0] + ".tar.zst"
-        print(f"Compressing bundle {i + 1} / {len(bundles)}")
+        print("Compressing bundle", terminal.color_key(f"{i + 1} / {len(bundles)}"))
         bundled = storage.compress_bundle(bundle_id, bundle)
         if not bundled:
             if retry:
-                print(f"Retrying compression of bundle {bundle_id} once.")
+                print(terminal.warn(f"Retrying compression of bundle {bundle_id} once."))
                 bundled = storage.compress_bundle(bundle_id, bundle)
             if not bundled:
-                print("Failed to compress all bundles.")
+                print(terminal.error("Failed to compress all bundles."))
                 return False
         _bundles_packed += 1
         _compress_time += time.time() - start_time
@@ -101,7 +101,8 @@ def _get_remaining_time_str(job_count: int, average_time: float, processed_count
             remaining_time_str = f"{remaining_time / 60.0 / 60:.1f} hours"
         else:
             remaining_time_str = f"{minutes:02}:{seconds:02}"
-    return terminal.color_key(remaining_time_str)
+        remaining_time_str = terminal.color_key(remaining_time_str)
+    return remaining_time_str
 
 
 def _print_compile_status(
@@ -114,10 +115,12 @@ def _print_compile_status(
         error_commits: set[str],
         current_commit: str) -> None:
     if Configuration.PRINT_MODE == PrintMode.QUIET:
-        print(f"Compiling commit {current_commit} ({processed_count + 1} of {job_commits})")
+        current_commit = git.get_short_name(current_commit)
+        count_info = f"({terminal.color_key(str(processed_count + 1))} of {terminal.color_key(str(job_commits))})"
+        print(f"Compiling commit {current_commit} {count_info}")
         return
     cols = terminal.get_cols()
-    title = terminal.color_key(f" Compiling #{processed_count + 1} of {job_commits} ")
+    title = terminal.color_ref(" Compiling ") + terminal.color_key(f"#{processed_count + 1}") + " of " + terminal.color_key(f"{job_commits} ")
     print(terminal.box_top(title=title))
 
     average_time = 0.0
@@ -129,6 +132,7 @@ def _print_compile_status(
         seconds = int(round(average_time)) % 60
         minutes = int(round(average_time)) // 60
         average_time_str = f"{minutes:02}:{seconds:02}"
+        average_time_str = terminal.color_key(average_time_str)
     remaining_time_str = _get_remaining_time_str(job_commits, average_time, processed_count)
     error_str = terminal.color_good("0")
     if len(error_commits) > 0:
@@ -175,12 +179,14 @@ def _get_fraction_completed(commit_list: list[str], present_versions: set[str]) 
 
 def _build_tag_line(tags: list[str], endpoint: str, bucket_times: list[int]) -> str:
     tags = [tag for tag in tags if tag.find(".") == tag.rfind(".") and "stable" in tag]
-    print(f"Tags: {tags}")
-    tag_bases = [git.get_merge_base(tag, endpoint) for tag in tags]
     tag_times = git.get_commit_times(tags)
+    import time
+    start_time = time.time()
     tag_times = {
-        tags[i][:tags[i].find("-")]: tag_times[tag_base]
-        for i, tag_base in enumerate(tag_bases)
+        tag[:tag.find("-")]: git.get_commit_time(git.get_merge_base(tag, endpoint))
+        for tag in tags
+        if tag_times[tag] != -1 and tag_times[tag] >= bucket_times[0]
+        and tag_times[tag] <= bucket_times[-1]
     }
     tag_buckets = {
         tag: [
@@ -226,7 +232,8 @@ def _print_histogram(
     if len(full_commit_list) == 0:
         return None
     full_percent = _get_fraction_completed(full_commit_list, present_versions) * 100
-    print(terminal.box_middle(title=f" Full Range Histogram ({full_percent:.1f}%)"))
+    full_percent_str = terminal.color_key(f"{full_percent:.1f}%")
+    print(terminal.box_middle(title=f" Full Range Histogram ({full_percent_str})"))
 
     bucket_commits = _split_list(full_commit_list, cols - 4)
     bucket_fractions = [
@@ -298,34 +305,38 @@ def compile(
         start_time = time.time()
 
         # Prepare to compile
-        _print_compile_status(
-            tags=tags,
-            full_commit_list=full_commit_list,
-            present_versions=present_versions,
-            processed_count=i,
-            job_commits=total_versions,
-            times=times,
-            error_commits=error_commits,
-            current_commit=commit)
-        processable_commits.remove(commit)
+        if total_versions > 1:
+            _print_compile_status(
+                tags=tags,
+                full_commit_list=full_commit_list,
+                present_versions=present_versions,
+                processed_count=i,
+                job_commits=total_versions,
+                times=times,
+                error_commits=error_commits,
+                current_commit=commit)
+        if i >= len(direct_compile) and commit not in present_versions:
+            processable_commits.remove(commit)
         git.check_out(commit)
 
         # Compile
         did_compile = _run_scons()
         if not did_compile:
+            short_name = git.get_short_name(commit)
             if len(compiled_versions) >= _MIN_SUCCESSES:
-                print(f"Error while compiling commit {commit}.")
-                print("Adding to the compile_error_commit file so it's skipped in the future.")
-                print("If you fix its build, you should remove it from the file"
-                    + " or run with --ignore-old-errors.")
+                print(terminal.error(f"Error while compiling commit {short_name}."))
+                print(terminal.warn("Adding to the compile_error_commit file so it's skipped in the future."))
+                print(terminal.warn("If you fix its build, you should remove it from the file"
+                    + " or run with --ignore-old-errors."))
                 storage.add_compiler_error_commits({commit})
-            print(f"Error while compiling commit {commit}. Skipping.")
+            print(terminal.error(f"Error while compiling commit {short_name}. Skipping."))
             error_commits.add(commit)
             continue
 
         # Process the compiled commit
         if not cache():
-            print(f"Error while caching commit {commit}.")
+            commit = git.get_short_name(commit)
+            print(terminal.error(f"Error while caching commit {commit}."))
             return False
         present_versions.add(commit)
         compiled_versions.append(commit)
@@ -349,10 +360,10 @@ def compile(
         if enough_compiled_for_compress and Configuration.COMPRESSION_ENABLED:
             if not compress(compiled_versions, retry_compress):
                 if fatal_compress:
-                    print("Terminating compilation due to compression failure.")
+                    print(terminal.error("Terminating compilation due to compression failure."))
                     return False
                 else:
-                    print("WARNING: Compression failed, continuing compilation anyways.")
+                    print(terminal.warn("Compression failed, continuing compilation anyways."))
 
         if signal_handler.soft_killed():
             return True
@@ -367,17 +378,19 @@ def _get_paths_from_ARTIFACT_PATHS() -> Optional[list[str]]:
         if glob.escape(archive_path) == archive_path:
             resolved_archive_path = os.path.join(Configuration.WORKSPACE_PATH, archive_path)
             if not os.path.exists(resolved_archive_path):
-                print(f"Error while archiving: requested file {archive_path} does not exist.")
+                archive_path = terminal.color_key(archive_path)
+                print(terminal.error(
+                    f"while archiving, requested file {archive_path} did not exist."))
                 return None
             paths.append(resolved_archive_path)
         else:
             for file_path in glob.glob(
                     archive_path, recursive=True, root_dir=Configuration.WORKSPACE_PATH
                 ):
-                abs_file_path = os.path.abspath(file_path)
+                abs_file_path = os.path.abspath(os.path.join(Configuration.WORKSPACE_PATH, file_path))
                 if not abs_file_path.startswith(abs_workspace_path):
-                    print("Error: Attempted to copy a file from outside"
-                        + f" of the workspace directory: {file_path}")
+                    print(terminal.error("Attempted to copy a file from outside"
+                        + f" of the workspace directory: {terminal.color_key(file_path)}"))
                     return None
                 paths.append(abs_file_path)
     return paths
@@ -385,11 +398,12 @@ def _get_paths_from_ARTIFACT_PATHS() -> Optional[list[str]]:
 
 def cache() -> bool:
     version_name = git.resolve_ref("HEAD")
-    print(f"Caching version {version_name}")
+    short_name = git.get_short_name(version_name)
+    print(f"Caching version {short_name}")
 
     version_path = storage.get_version_folder(version_name)
     if os.path.exists(version_path):
-        print("Version to cache already exists, overwriting it.")
+        print(terminal.warn("Version to cache already exists, overwriting it."))
         storage.rm(version_path)
     os.makedirs(version_path, exist_ok=True)
 
@@ -407,7 +421,7 @@ def cache() -> bool:
         else:
             shutil.move(transfer_path, destination_path)
 
-    print(f"Version {version_name} has been successfully cached.")
+    print(f"Version {short_name} has been successfully cached.")
     return True
 
 
@@ -426,5 +440,5 @@ def clean_build_artifacts() -> None:
     if _run_scons(["--clean"]):
         print("Build artifacts cleaned.")
     else:
-        print("Failed to clean build artifacts.")
+        print(terminal.error("Failed to clean build artifacts."))
         return

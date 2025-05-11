@@ -8,7 +8,7 @@ from src import factory
 from src import git
 from src import storage
 from src import terminal
-from src.config import Configuration
+from src.config import Configuration, PrintMode
 
 _CACHE_NAME = "execution_cache"
 _MAX_CACHE_SIZE = 1000
@@ -18,11 +18,11 @@ def delete_cache(dry_run: bool = False) -> int:
     path_exists = os.path.exists(storage.get_state_filename(_CACHE_NAME))
     if dry_run:
         if path_exists:
-            print(f"Cache \"{_CACHE_NAME}\" would be deleted.")
+            print(f"Would delete cache \"{_CACHE_NAME}\"")
             return 1
         return 0
-    if Configuration.PRINT_MODE == Configuration.PrintMode.VERBOSE and path_exists:
-        print(f"Deleting cache \"{_CACHE_NAME}\".")
+    if Configuration.PRINT_MODE != PrintMode.QUIET and path_exists:
+        print(f"Deleting cache \"{_CACHE_NAME}\"")
     return storage.delete_state(_CACHE_NAME)
 
 
@@ -39,14 +39,16 @@ def launch(
         present_versions: set[str],
         discard: bool,
         cached_only: bool,
-        wd: str = "") -> bool:
+        wd: str = "",
+        no_subwindow: bool = False) -> bool:
     return launch_with_automation(
         ref,
         execution_arguments,
         present_versions,
         discard,
         cached_only,
-        wd) != "error"
+        wd,
+        no_subwindow=no_subwindow) != "error"
 
 
 def launch_with_automation(
@@ -62,23 +64,28 @@ def launch_with_automation(
         automate_bad_regex: Optional[re.Pattern] = None,
         automate_crash: Optional[str] = None,
         automate_exit: Optional[str] = None,
-        automate_script: Optional[str] = None) -> str:
+        automate_script: Optional[str] = None,
+        no_subwindow: bool = False) -> str:
     commit = git.resolve_ref(ref)
     if commit == "":
-        print(f"Invalid ref: \"{ref}\" could not be resolved.")
+        ref = terminal.color_ref(ref)
+        print(terminal.error(f"Invalid ref: \"{ref}\" could not be resolved."))
         return "error"
+    short_name = git.get_short_name(commit)
 
     if commit not in present_versions:
         if cached_only:
-            print(f"Commit {git.get_short_name(commit)} is not cached."
-                + " Skipping due to --cached-only.")
+            print(terminal.error(f"Commit {short_name} is not cached."
+                + " Skipping due to --cached-only."))
             return "error"
 
+        print(f"Compiling commit {short_name}...")
         if not factory.compile_uncached(commit):
-            print(f"Failed to compile commit {git.get_short_name(commit)}.")
+            print(terminal.error(f"Failed to compile commit {short_name}."))
             return "error"
 
         if discard:
+            print(f"Launching commit {short_name}...")
             return _launch_folder(
                 Configuration.WORKSPACE_PATH,
                 execution_arguments,
@@ -89,17 +96,20 @@ def launch_with_automation(
                 automate_bad_regex,
                 automate_crash,
                 automate_exit,
-                automate_script)
+                automate_script,
+                no_subwindow)
 
+        print(f"Caching commit...")
         if not factory.cache():
             return "error"
         present_versions.add(commit)
 
     if not storage.extract_version(commit):
-        print(f"Failed to extract commit {git.get_short_name(commit)}.")
+        print(terminal.error(f"Failed to extract commit {short_name}."))
         return "error"
 
     _mark_used(commit)
+    print(f"Launching commit {short_name}...")
     return _launch_folder(
         storage.get_version_folder(commit),
         execution_arguments,
@@ -110,22 +120,22 @@ def launch_with_automation(
         automate_bad_regex,
         automate_crash,
         automate_exit,
-        automate_script)
+        automate_script,
+        no_subwindow)
 
 
 def _find_executable(
         base_folder: str,
         likely_location: str,
-        backup_path_regex: str) -> Optional[str]:
+        backup_path_regex: re.Pattern) -> Optional[str]:
     likely_location = os.path.join(base_folder, likely_location)
     if os.path.exists(likely_location):
         return likely_location
 
-    backup_path_re = re.compile(backup_path_regex)
     for root, _, files in os.walk(base_folder):
         for file in files:
             full_path = os.path.join(root, file)
-            if backup_path_re.match(full_path):
+            if backup_path_regex.search(full_path):
                 return full_path
 
     return None
@@ -141,18 +151,23 @@ def _launch_folder(
         automate_bad_regex: Optional[re.Pattern],
         automate_crash: Optional[str],
         automate_exit: Optional[str],
-        automate_script: Optional[str]) -> str:
+        automate_script: Optional[str],
+        no_subwindow: bool = False) -> str:
     executable_path = _find_executable(
         workspace_path, Configuration.EXECUTABLE_PATH, Configuration.BACKUP_EXECUTABLE_REGEX
     )
     if executable_path is None:
-        print(f"Executable not found in {workspace_path}.")
+        workspace_path = terminal.color_key(workspace_path)
+        print(terminal.error(f"Executable not found in {workspace_path}."))
         return "error"
     executable_path = str(Path(executable_path).resolve())
 
     command = [executable_path] + shlex.split(execution_arguments, posix='nt' != os.name)
     if automate_script is not None:
         command = [automate_script] + command
+
+    print(f"Command: {terminal.color_key(' '.join(command))}")
+    print(f"Working directory: {terminal.color_key(wd)}")
 
     return terminal.execute_in_subwindow_with_automation(
         command=command,

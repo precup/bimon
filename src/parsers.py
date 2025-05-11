@@ -4,7 +4,6 @@ from argparse import ArgumentParser, SUPPRESS
 from typing import Optional
 
 from src import commands
-from src import terminal
 from src.config import PrintMode
 
 
@@ -116,7 +115,7 @@ def get_bimon_parser(base_command: Optional[str] = None) -> ArgumentParser:
     add_messages("run", run_parser)
     run_parser.set_defaults(func=lambda args:
         commands.run_command(
-            execution_args=args.execution_args,
+            execution_args=args.execution_arguments,
             discard=args.discard,
             issue=args.issue,
             project=args.project,
@@ -193,7 +192,7 @@ def get_bimon_parser(base_command: Optional[str] = None) -> ArgumentParser:
     clean_parser.add_argument("-b", "--build-artifacts", action="store_true", help=
         "Delete build files with \"scons --clean.\"")
     clean_parser.add_argument("-c", "--caches", action="store_true", help=
-        "Delete internal caches, mostly stored git information")
+        "Delete internal caches, mostly stored git information that may take a while to regenerate")
     clean_parser.add_argument("-t", "--temp-files", action="store_true", help=
         "Delete temporary files used during processing")
     clean_parser.add_argument("--projects", action="store_true", help=
@@ -219,7 +218,7 @@ def get_bimon_parser(base_command: Optional[str] = None) -> ArgumentParser:
         description="Compile and store specific commits. Very similar to update.",
         usage="bimon.py compile [COMMIT_OR_RANGE]...",
         add_help=False)
-    compile_parser.add_argument("ref_ranges", nargs="*", default="HEAD", help=
+    compile_parser.add_argument("refs", nargs="*", default=["HEAD"], help=
         "The commits to compile. Accepts references, ranges, or PRs. Uses HEAD if not provided.")
     add_messages("compile", compile_parser)
     compile_parser.set_defaults(func=lambda args:
@@ -252,7 +251,7 @@ def get_bimon_parser(base_command: Optional[str] = None) -> ArgumentParser:
     write_precache_parser = subparsers.add_parser("write-precache",
         add_help=False)
     write_precache_parser.add_argument("-h", "--help", action="help", default=SUPPRESS, help=
-        "Show this help message and exit.")
+        "Show this help message.")
     write_precache_parser.set_defaults(func=lambda _:
         commands.write_precache_command())
 
@@ -280,7 +279,7 @@ def add_bisect_parser(parent_parser: ArgumentParser) -> None:
     help_messages = []
     def add_messages(command: str, parser: ArgumentParser) -> None:
         parser.add_argument("-h", "--help", action="help", default=SUPPRESS, help=
-            "Show this help message and exit.")
+            "Show this help message.")
         help_messages.append((command, parser.format_usage(), parser.format_help()))
 
     parser = parent_parser.add_subparsers(
@@ -390,12 +389,14 @@ def add_bisect_parser(parent_parser: ArgumentParser) -> None:
     parser_list = parser.add_parser("list", add_help=False,
         help="Lists all remaining possible commits.",
         description="",
-        usage="list [-s]")
+        usage="list [-s] [-b]",)
     parser_list.add_argument("-s", "--short", action="store_true", help=
         "Print only shortened commit SHAs and no log information.")
+    parser_list.add_argument("-b", "--best", action="store_true", help=
+        "Sort by best bisect score instead of commit date.")
     add_messages("list", parser_list)
     parser_list.set_defaults(func=lambda bisector, args:
-        bisector.list_command(args.short))
+        bisector.list_command(args.short, args.best))
 
     parser_status = parser.add_parser("status", add_help=False,
         help="Prints summary information about the current bisect.",
@@ -440,16 +441,24 @@ def _preparse_command(args: list[str], commands: list[str]) -> list[str]:
     if len(args) == 0:
         return args
 
+    command_index = 0
+    while command_index < len(args) and args[command_index].startswith("-"):
+        if args[command_index].startswith("--c") and "=" not in args[command_index]:
+            command_index += 1
+        command_index += 1
+    if command_index >= len(args):
+        return args
+
     matches = [
         cmd for cmd in commands
-        if cmd.startswith(args[0].lower())
-        and (cmd not in _HIDDEN_COMMANDS or cmd == args[0].lower())
+        if cmd.startswith(args[command_index].lower())
+        and (cmd not in _HIDDEN_COMMANDS or cmd == args[command_index].lower())
     ]
     if len(matches) == 1:
-        args[0] = matches[0]
+        args[command_index] = matches[0]
         return args
     elif len(matches) > 1:
-        print(terminal.error("Ambiguous command. Possible completions:"))
+        print("Ambiguous command. Possible completions:")
         for cmd in matches:
             print(f"  {cmd}")
     return []

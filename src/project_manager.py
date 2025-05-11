@@ -10,6 +10,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from src import storage
+from src import terminal
 from src.config import Configuration, PrintMode
 
 INVALID_NAME_CHARS = r'<>:"/\|?*'
@@ -61,8 +62,8 @@ def get_github_number(flexible_arg: str) -> tuple[int, bool]:
         if base_url in flexible_arg:
             flexible_arg = flexible_arg[flexible_arg.index(base_url) + len(base_url):]
             if flexible_arg == "" or not flexible_arg[0].isdigit():
-                print("Unrecoverable internal error: No number found in argument"
-                    + " despite it being a non-zip URL.")
+                print(terminal.error("No number found in argument despite"
+                    + " it being a non-zip URL.", "UNRECOVERABLE INTERNAL ERROR"))
                 sys.exit(1)
             number = ""
             for char in flexible_arg:
@@ -76,24 +77,25 @@ def get_github_number(flexible_arg: str) -> tuple[int, bool]:
         flexible_arg = flexible_arg[1:]
     if flexible_arg.isdigit():
         github_number = int(flexible_arg)
-        is_issue = get_approx_issue_creation_time(github_number) != -1
-        return github_number, is_issue
+        create_time = get_approx_issue_creation_time(github_number)
+        if create_time is None:
+            return -1, False
+        return github_number, create_time != -1
     return -1, False
 
 
-def get_approx_issue_creation_time(issue: int) -> int:
+def get_approx_issue_creation_time(issue: int) -> Optional[int]:
     # Can't easily get the actual time, just a date, so we actually just
     # return the timestamp a couple days after that to avoid any timezone issues
     url = ISSUES_URL + str(issue)
     response = requests.get(url, timeout=60)
+    if response.status_code != 200:
+        return None
     soup = BeautifulSoup(response.content, "html.parser")
     body_divs = soup.find_all("div")
-    print(response.content.decode("utf-8").count("relative-time"))
     for div in body_divs:
         if any("issue-body" in class_name for class_name in div.attrs.get("class", [])):
-            print(f"Found issue body div: {div}")
             date_div = div.find("relative-time")
-            print(f"Date div: {date_div}")
             if date_div is not None:
                 date_text = date_div.text.strip()
                 try:
@@ -108,7 +110,7 @@ def clean(projects: bool = False, temp_files: bool = False, dry_run: bool = Fals
     clean_count = 0
 
     if projects and os.path.exists(_PROJECT_FOLDER):
-        if dry_run or Configuration.PRINT_MODE == PrintMode.VERBOSE:
+        if dry_run or Configuration.PRINT_MODE != PrintMode.QUIET:
             for project in os.listdir(_PROJECT_FOLDER):
                 project_path = os.path.join(_PROJECT_FOLDER, project)
                 if dry_run:
@@ -126,7 +128,7 @@ def clean(projects: bool = False, temp_files: bool = False, dry_run: bool = Fals
             print(f"Would delete {_TEMPORARY_ZIP}")
             clean_count += 1
         else:
-            if Configuration.PRINT_MODE == PrintMode.VERBOSE:
+            if Configuration.PRINT_MODE != PrintMode.QUIET:
                 print(f"Deleting {_TEMPORARY_ZIP}")
             clean_count += storage.rm(_TEMPORARY_ZIP)
 
@@ -152,7 +154,8 @@ def extract_project(zip_filename: str, project_name: str, title: Optional[str] =
 
     project_file = find_project_file(project_folder)
     if project_file is None:
-        print("Project extraction failed, project.godot file not found in the extracted folder.")
+        print(terminal.error(
+            "Project extraction failed, project.godot file not found in the extracted folder."))
         return ""
     if title is not None:
         set_project_title(project_file, title)
@@ -197,15 +200,22 @@ def set_project_title(project_file: str, title: str, prepend_existing: bool = Fa
     # Update the actual title line
     if title_line_index == -1:
         title_line_index = application_line_index + 1
-        lines.insert(title_line_index, f"config/name={title}\n")
+        lines.insert(title_line_index, f"config/name=\"{title}\"\n")
     else:
         line_parts = lines[title_line_index].split("=", 1)
-        if line_parts[1].startswith(title):
+        line_parts[1] = line_parts[1].strip()
+        if line_parts[1].startswith("\"") and line_parts[1].endswith("\""):
+            line_parts[1] = line_parts[1][1:-1]
+
+        if line_parts[1].lower() == title.lower() or (
+            line_parts[1].startswith(title) and prepend_existing):
             return
+
         if prepend_existing:
             line_parts[1] = f"{title} - " + line_parts[1]
         else:
             line_parts[1] = title
+        line_parts[1] = "\"" + line_parts[1] + "\"\n"
         lines[title_line_index] = "=".join(line_parts)
 
     with open(project_file, "w") as f:
@@ -231,15 +241,19 @@ def find_project_file(folder: str, silent: bool = False) -> Optional[str]:
         return project_files[0] if len(project_files) >= 1 else None
 
     if len(project_files) > 1:
-        print("Multiple project.godot files found in the extracted folder."
+        print("Multiple project.godot files found in the project folder."
             + " Please specify which one to use.")
         if all_files_prefix is None:
             all_files_prefix = folder
         for i, file in enumerate(project_files):
-            print(f"{i + 1}: {file[file.index(all_files_prefix) + len(all_files_prefix):]}")
+            print(terminal.color_key(f"{i + 1}:"), 
+                file[file.index(all_files_prefix) + len(all_files_prefix):])
         choice = _get_menu_choice(
-            "Enter the number of the project.godot file to use, or n if none look right [1]: ",
-            "Invalid choice. Please enter a valid number or \"n\" [1]: ",
+            "Enter the number of the project.godot file to use, or "
+            + terminal.color_key("n") + " if none look right ["
+            + terminal.color_key("1") + "]: ",
+            "Invalid choice. Please enter a valid number or "
+            + terminal.color_key("n") + " [" + terminal.color_key("1") + "]: ",
             set([str(i + 1) for i in range(len(project_files))] + ["none"]),
             default="1")
 
@@ -251,7 +265,8 @@ def find_project_file(folder: str, silent: bool = False) -> Optional[str]:
         return project_files[0]
 
     print("No project.godot file found in the project folder.")
-    response = input("Would you like to create a new one? [Y/n]: ").strip().lower()
+    response = input("Would you like to create a new one? ["
+        + terminal.color_key("Y") + "/n]: ").strip().lower()
     if response.startswith("n"):
         return None
     else:
@@ -296,7 +311,7 @@ def download_project(zip_link: str, project_name: str, title: Optional[str] = No
             f.write(response.content)
         print("Download complete, extracting...")
     except requests.exceptions.RequestException as e:
-        print(f"Error downloading zip file: {e}")
+        print(terminal.error(f"Error downloading zip file: {e}"))
         return False
 
     return extract_project(_TEMPORARY_ZIP, project_name, title) != ""
@@ -319,16 +334,20 @@ def create_project(
         if issue_number != -1:
             project_name = str(issue_number)
         else:
-            print("No project name or issue number provided. Creating a sandbox instead.")
+            print("No project name or issue number provided. Using the sandbox instead.")
             project_name = _SANDBOX_NAME
     project_folder = get_project_path(project_name)
 
     if os.path.exists(project_folder):
         project_file = find_project_file(project_folder, True)
         if issue_number < 0 and project_file != "":
-            print("An existing project was found at that location.")
+            if project_name != _SANDBOX_NAME:
+                print("An existing project was found at that location.")
             if not force:
-                response = input("Would you like to use it? [Y/n]: ").strip().lower()
+                query = "Would you like to use it?"
+                if project_name == _SANDBOX_NAME:
+                    query = "Do you want to use the existing sandbox project?"
+                response = input(query + " [" + terminal.color_key("Y") + "/n]: ").strip().lower()
                 if not response.startswith("n"):
                     project_file = find_project_file(project_folder)
                     return project_file if project_file is not None else ""
@@ -356,12 +375,12 @@ def export_project(project_name: str, export_path: str, title: Optional[str] = N
         project_name = _SANDBOX_NAME
 
     if not is_valid_project_name(project_name):
-        print(f"Invalid project name \"{project_name}\". Cannot export.")
+        print(terminal.error(f"Invalid project name \"{project_name}\". Cannot export."))
         return False
 
     project_folder = get_project_path(project_name)
     if not os.path.exists(project_folder):
-        print(f"Project folder for \"{project_name}\" does not exist. Cannot export.")
+        print(terminal.error(f"Project folder for \"{project_name}\" does not exist. Cannot export."))
         return False
 
     if os.path.exists(export_path):
@@ -370,7 +389,7 @@ def export_project(project_name: str, export_path: str, title: Optional[str] = N
     else:
         folder = os.path.dirname(export_path)
         if folder != "" and not os.path.exists(folder):
-            print(f"Export folder \"{folder}\" does not exist. Cannot export.")
+            print(terminal.error(f"Export folder \"{folder}\" does not exist. Cannot export."))
             return False
 
     with zipfile.ZipFile(export_path, "w") as f:
@@ -381,27 +400,44 @@ def export_project(project_name: str, export_path: str, title: Optional[str] = N
 
             for file in files:
                 file_path = os.path.join(root, file)
+                output_file_path = file_path
                 if file == "project.godot" and title is not None:
                     file_path = _get_temp_project_file(file_path, title)
-                f.write(file_path, os.path.relpath(file_path, project_folder))
+                f.write(file_path, os.path.relpath(output_file_path, project_folder))
     return True
 
 
-def get_mrp(issue: int) -> str:
-    if issue == -1:
-        print("Execution parameters request a {PROJECT} but no project or issue was provided.")
-        response = input("Would you like to use a temporary sandbox project? [Y/n]: ")
-        if response.strip().lower().startswith("n"):
-            return ""
+def get_project_name_from_issue_or_file(issue: Optional[int], file_name: str) -> str:
+    if issue != -1 and issue is not None:
+        return str(issue)
+
+    project_name = os.path.splitext(os.path.basename(file_name))[0]
+    if os.path.exists(os.path.join(_PROJECT_FOLDER, project_name)):
+        print(terminal.warn(f"Project {terminal.color_key(project_name)} already exists."))
+        response = input("Would you like to overwrite it? [y/"
+            + terminal.color_key("N") + "]: ").strip().lower()
+        if response.startswith("y"):
+            shutil.rmtree(os.path.join(_PROJECT_FOLDER, project_name))
         else:
-            return create_project()
+            suffix = 1
+            while os.path.exists(os.path.join(_PROJECT_FOLDER, f"{project_name}-{suffix}")):
+                suffix += 1
+            project_name = f"{project_name}-{suffix}"
+            print("Using project name " + terminal.color_key(project_name) + " instead.")
+    return project_name
+
+
+def get_mrp(issue: Optional[int]) -> str:
+    if issue == -1 or issue is None:
+        return create_project()
 
     force_create = False
     folder_name = os.path.join(_PROJECT_FOLDER, f"{issue}")
     zip_filename = os.path.join(_PROJECT_FOLDER, f"{issue}.zip")
     if os.path.exists(folder_name) or os.path.exists(zip_filename):
         print(f"Previously used MRP found for issue {issue}.")
-        response = input("Would you like to use it? [Y/n]: ").strip().lower()
+        response = input("Would you like to use it? ["
+            + terminal.color_key("Y") + "/n]: ").strip().lower()
         if response.startswith("n"):
             force_create = True
         else:
@@ -420,11 +456,14 @@ def get_mrp(issue: int) -> str:
             if len(zip_links) > body_links_len:
                 source_type = "issue" if i < body_links_len else "comment"
                 body_info = f" (in {source_type})"
-            print(str(i + 1) + body_info + f": {link}")
-        print("c: Create a new blank project")
+            print(terminal.color_key(str(i + 1) + body_info + ":"), link)
+        print(terminal.color_key("c:") + " Create a new blank project")
+        default_option = os.path.basename(zip_links[0])
+        if len(default_option) > 25:
+            default_option = default_option[:25] + "..."
         choice = _get_menu_choice(
-            "Enter the number of the zip file to download, or c to create a blank project [1]: ",
-            "Invalid choice. Please enter a valid number or \"c\" [1]: ",
+            "Enter an option from above [" + terminal.color_key(default_option) + "]: ",
+            "Invalid choice. Please enter a valid option [" + terminal.color_key(default_option) + "]: ",
             set([str(i + 1) for i in range(len(zip_links))] + ["create", "none"]),
             default="1")
 
@@ -432,15 +471,18 @@ def get_mrp(issue: int) -> str:
             return ""
         if choice != "create":
             zip_link = zip_links[int(choice) - 1]
+
             if download_project(zip_link, str(issue)):
-                return find_project_file(get_project_path(str(issue)))
+                project_file = find_project_file(get_project_path(str(issue)))
+                if project_file is None:
+                    print(terminal.error("Project extraction failed."))
+                    return ""
+                return project_file
+            print(terminal.error("Error downloading project."))
             return ""
 
     else:
         print(f"No MRP found in issue #{issue}.")
-        response = input("Would you like to create a blank project to use? [Y/n]: ")
-        if response.strip().lower().startswith("n"):
-            return ""
 
     return create_project(str(issue), force=force_create)
 
@@ -463,6 +505,6 @@ def _get_menu_choice(
             if len(matches) == 1:
                 return matches[0]
             elif len(matches) > 1:
-                print("Ambiguous choice. Please enter a more specific choice.")
+                print(terminal.error("Ambiguous choice. Please enter a more specific choice."))
 
         choice = input(error_prompt)

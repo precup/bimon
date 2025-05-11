@@ -8,7 +8,7 @@ from pyzstd import CParameter, DParameter, ZstdFile
 
 from src import git
 from src import terminal
-from src.config import Configuration
+from src.config import Configuration, PrintMode
 from src.pooled_executor import PooledExecutor
 
 _VERSIONS_DIR = "versions"
@@ -110,6 +110,8 @@ def get_present_versions() -> set[str]:
 def get_recursive_file_count(folder: str) -> int:
     if not os.path.exists(folder):
         return 0
+    if os.path.isfile(folder):
+        return 1
     file_count = 0
     for root, _, files in os.walk(folder):
         file_count += len(files)
@@ -167,7 +169,7 @@ def clean_duplicate_files(
             print(f"Would delete {version_path}")
             clean_count += get_recursive_file_count(version_path)
         else:
-            if Configuration.PRINT_MODE == Configuration.PrintMode.VERBOSE:
+            if Configuration.PRINT_MODE != PrintMode.QUIET and keep_count == 0:
                 print(f"Deleting {version_path}")
             clean_count += rm(version_path)
     return clean_count
@@ -347,11 +349,11 @@ def clean_loose_files(dry_run: bool = False) -> int:
     for file in loose_files:
         path = os.path.join(_VERSIONS_DIR, file)
         if dry_run:
-            print(f"Would remove {path}")
+            print(f"Would delete {path}")
             cleaned += get_recursive_file_count(path)
         else:
-            if Configuration.PRINT_MODE == Configuration.PrintMode.VERBOSE:
-                print(f"Removing {path}")
+            if Configuration.PRINT_MODE != PrintMode.QUIET:
+                print(f"Deleting {path}")
             cleaned += rm(path)
     return cleaned
 

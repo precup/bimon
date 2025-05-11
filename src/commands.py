@@ -14,7 +14,7 @@ from src import parsers
 from src import signal_handler
 from src import storage
 from src import terminal
-from src.config import Configuration
+from src.config import Configuration, PrintMode
 
 _ORIGINAL_WD = os.getcwd()
 
@@ -30,8 +30,8 @@ def init_command() -> None:
         Configuration.RANGE_START, Configuration.RANGE_END, allow_empty=True
     )
     if config_range_error is not None:
-        print("Problem found with range_start/range_end in the config:")
-        print(config_range_error)
+        print(terminal.error("Problem found with range_start/range_end in the config:"))
+        print(terminal.error(config_range_error))
         sys.exit(1)
 
     print("Basic checks passed.")
@@ -42,7 +42,8 @@ def update_command(
         cursor_ref: Optional[str],
         update_ranges: Optional[list[str]]) -> None:
     git.load_cache()
-    signal_handler.install()
+    if Configuration.PRINT_MODE == PrintMode.LIVE:
+        signal_handler.install()
 
     print("Fetching...")
     git.fetch()
@@ -52,7 +53,8 @@ def update_command(
     if cursor_ref is not None and len(cursor_ref) > 0:
         cursor_commit = git.resolve_ref(cursor_ref)
         if cursor_commit == "":
-            print(f"The cursor ref {cursor_ref} could not be found.")
+            cursor_ref = terminal.color_ref(cursor_ref)
+            print(terminal.error(f"The cursor ref {cursor_ref} could not be found."))
             sys.exit(1)
     else:
         head_commit = git.resolve_ref("HEAD")
@@ -66,15 +68,11 @@ def update_command(
         print("All the requested commits are already cached or ignored.")
         sys.exit(0)
 
-    cut = commit_list.index(cursor_commit)
-    if cut < 0:
-        print(f"The cursor commit {cursor_commit} was not in the commit range(s).")
-        sys.exit(1)
-
-    while commit_list[cut] not in missing_commits:
-        cut -= 1
-    cut = missing_commits.index(commit_list[cut]) + 1
-    missing_commits = missing_commits[cut:] + missing_commits[:cut]
+    cut_commit = git.get_similar_commit(cursor_commit, set(missing_commits))
+    if cut_commit == "":
+        cut_commit = missing_commits[-1]
+    cut_index = missing_commits.index(cut_commit)
+    missing_commits = missing_commits[cut_index:] + missing_commits[:cut_index]
 
     if not factory.compile(missing_commits[::-1]):
         sys.exit(1)
@@ -108,8 +106,9 @@ def run_command(
             print("Using the most recent cached version.")
             commit = commit_list[-1]
         elif cached_only:
-            print("No cached versions found to run.")
-            print("Try running without --cached-only or running an update or compile.")
+            print(terminal.error("No cached versions found to run."))
+            print(terminal.error("Try running without --cached-only or running"
+                + " an update or compile."))
             sys.exit(1)
         else:
             print("No cached versions found to run.")
@@ -117,22 +116,27 @@ def run_command(
             commit = git.resolve_ref("HEAD")
     else:
         if commit not in present_versions and cached_only:
-            print(f"Commit {commit} is not cached.")
-            print("Try running without --cached-only or running an update or compile.")
+            commit = git.get_short_name(commit)
+            print(terminal.error(f"Commit {commit} is not cached."))
+            print(terminal.error("Try running without --cached-only or"
+                + " running an update or compile."))
             sys.exit(1)
         if commit in ignored_commits:
-            print(f"WARNING: Commit {commit} is ignored. Continuing anyway.")
+            short_name = git.get_short_name(commit)
+            print(terminal.warn(f"Commit {short_name} is ignored. Continuing anyway."))
         elif commit in compiler_error_commits:
-            print(f"WARNING: Commit {commit} has had compiler errors in the past."
-                  + " Continuing anyway.")
-
+            short_name = git.get_short_name(commit)
+            print(terminal.warn(f"Commit {short_name} has had compiler errors in the past."
+                  + " Continuing anyway."))
+                  
     success = execution.launch(
         ref=commit,
-        execution_args=execution_args,
+        execution_arguments=execution_args,
         present_versions=present_versions,
         discard=discard,
         cached_only=False,
-        wd=project)
+        wd=project,
+        no_subwindow=True)
 
     if not success:
         sys.exit(1)
@@ -164,7 +168,11 @@ def bisect_command(
 
     issue_time = -1
     if issue_number >= 0 and not ignore_date:
-        issue_time = project_manager.get_approx_issue_creation_time(issue_number)
+        poss_issue_time = project_manager.get_approx_issue_creation_time(issue_number)
+        if poss_issue_time is None:
+            print(terminal.error("Unexpected error acquiring issue creation time, trying to continue anyways."))
+        else:
+            issue_time = poss_issue_time
 
     bisector = bisect.Bisector(
         discard=discard,
@@ -176,14 +184,16 @@ def bisect_command(
         initial_goods=goods,
         initial_bads=bads)
 
-    print("Entering bisect interactive mode. Type \"help\" for a list of commands.")
+    print()
+    print("Entering bisect interactive mode. Type", 
+        terminal.color_key("help"), "for a list of commands.")
     bisector.queue_decompress_nexts()
     bisector.print_status_message()
     terminal.set_command_completer(parsers.bisect_command_completer)
     parser = parsers.get_bisect_parser()
     while True:
         try:
-            command = input("bisect> ").strip()
+            command = input(terminal.color_key("bisect> ")).strip()
             if command == "":
                 continue
             terminal.add_to_history(command)
@@ -193,7 +203,7 @@ def bisect_command(
 
                 if len(clean_args) == 0:
                     if len(split_args) > 0:
-                        print(f"unrecognized command: {split_args[0]}, use \"help\" for help.")
+                        print(terminal.error(f"unrecognized command: {split_args[0]}"))
                     continue
 
                 has_help = '--help' in split_args or '-h' in split_args
@@ -212,9 +222,11 @@ def bisect_command(
                     break
 
             except AttributeError as e:
-                print("Invalid command or option:", e)
+                print(terminal.error("Invalid command or option: " + str(e)))
             except argparse.ArgumentError as e:
-                print(e)
+                print(terminal.error(str(e)))
+            except SystemExit:
+                pass # argparse --help does this for some stupid reason
         except KeyboardInterrupt:
             print()
             continue
@@ -233,7 +245,8 @@ def extract_command(ref: str, folder: Optional[str]) -> None:
 
     version = git.resolve_ref(ref)
     if version == "":
-        print(f"Invalid ref: {ref} could not be resolved.")
+        ref = terminal.color_ref(ref)
+        print(terminal.error(f"Invalid ref: {ref} could not be resolved."))
         sys.exit(1)
 
     if folder is None:
@@ -254,7 +267,7 @@ def clean_command(
         build_artifacts: Optional[bool],
         dry_run: bool = False) -> None:
     if not (projects or duplicates or caches or temp_files or loose_files or build_artifacts):
-        print("No options provided, nothing to be done.")
+        print("No options provided, nothing to be done")
         return
 
     clean_count = 0
@@ -266,7 +279,7 @@ def clean_command(
         clean_count += project_manager.clean(temp_files=True, dry_run=dry_run)
     if build_artifacts:
         if dry_run:
-            print("Build artifacts will be deleted.")
+            print("Would delete build artifacts")
         else:
             factory.clean_build_artifacts()
     if caches:
@@ -276,7 +289,14 @@ def clean_command(
         clean_count += storage.clean_loose_files(dry_run)
 
     if not build_artifacts or clean_count > 0:
-        print(f"Purged {clean_count} items.")
+        if clean_count == 0:
+            print("Nothing to clean")
+        else:
+            item_str = "item" if clean_count == 1 else "items"
+            if dry_run:
+                print("Would delete", terminal.color_key(str(clean_count)), item_str)
+            else:
+                print("Deleted", terminal.color_key(str(clean_count)), item_str)
 
 
 def compile_command(ref_ranges: list[str]) -> None:
@@ -300,7 +320,8 @@ def compile_command(ref_ranges: list[str]) -> None:
 
             commit = git.resolve_ref(who_knows, fetch_if_missing=True)
             if commit == "":
-                print(f"Invalid commit: {who_knows} was not found.")
+                who_knows = terminal.color_ref(who_knows)
+                print(terminal.error(f"Invalid commit: {who_knows} was not found."))
                 sys.exit(1)
             commit_list = [commit]
 
@@ -322,6 +343,11 @@ def compress_command(compress_all: bool) -> None:
 
 def write_precache_command() -> None:
     git.load_cache()
+    git.update_neighbors(None)
+    for commit in git.get_commit_list("", ""):
+        for neighbor in git.get_neighbors(commit):
+            git.get_diff_size(commit, neighbor)
+        git.get_commit_time(commit)
     git.save_precache()
 
 
@@ -337,37 +363,39 @@ def help_command(
     for key_command, _, help_message in help_messages:
         for alias in aliases.get(key_command, []) + [key_command]:
             if alias.startswith(command_prefix):
-                if should_pad:
-                    print("-" * 80)
+                print(terminal.color_log("-" * 80))
                 print()
                 should_pad = True
                 print(help_message)
                 break
 
-    if not should_pad:
-        print("That command is unknown.")
+    if should_pad:
+        print(terminal.color_log("-" * 80))
+    else:
+        print(terminal.error("That command is unknown."))
         print("Available commands:")
         for key_command, _, _ in help_messages:
             print("  " + "/".join([key_command] + aliases.get(key_command, [])))
 
 
 def export_command(project_name: str, export_path: str, title: Optional[str] = None) -> None:
-    if any(c in project_name for c in project_manager.INVALID_NAME_CHARS):
-        print("Invalid project name: may not contain any of the following characters: "
-            + "".join(project_manager.INVALID_NAME_CHARS))
-        sys.exit(1)
+    _validate_project_name(project_name)
     project_manager.export_project(project_name, export_path, title=title)
 
 
 def create_command(project_name: str, title: Optional[str] = None) -> None:
-    if any(c in project_name for c in project_manager.INVALID_NAME_CHARS):
-        print("Invalid project name: may not contain any of the following characters: "
-            + "".join(project_manager.INVALID_NAME_CHARS))
-        sys.exit(1)
+    _validate_project_name(project_name)
     project_manager.create_project(project_name, title=title)
 
 
 ############################################################################3
+
+
+def _validate_project_name(project_name: str) -> None:
+    if any(c in project_name for c in project_manager.INVALID_NAME_CHARS):
+        print(terminal.error("Invalid project name: may not contain any of the following characters: "
+            + terminal.color_key("".join(project_manager.INVALID_NAME_CHARS))))
+        sys.exit(1)
 
 
 def _handle_autoclean() -> None:
@@ -400,14 +428,16 @@ def _exit_if_duplicate(
         who_knows: str,
         reason: str = "") -> None:
     article = "an" if typename.startswith("i") else "a"
-    prefix = f"flexible_args detected {article} {typename} \"{who_knows}\" passed to it"
+    prefix = f"flexible_args detected {article} {typename} {terminal.color_key(
+        who_knows)} passed to it"
     if item is not None:
-        print(prefix + f", but --{typename} is already set.")
+        print(terminal.error(prefix + f", but --{typename} is already set."))
         sys.exit(1)
     elif item_internal is not None and item_internal != -1:
         if reason == "":
             reason = item_internal
-        print(prefix + f", but another {typename} \"{reason}\" was already autodetected.")
+        print(terminal.error(prefix + f", but another {typename} {terminal.color_key(
+            reason)} was already autodetected."))
         sys.exit(1)
 
 
@@ -423,13 +453,17 @@ def _determine_flexible_args(
     bads: set[str] = set()
     def add_to_goods(good_commit: str) -> None:
         if any(git.is_ancestor(bad_commit, good_commit) for bad_commit in bads):
-            print(f"Invalid range: a known bad commit is an ancestor of {good_commit}.")
+            good_commit = git.get_short_name(good_commit)
+            print(terminal.error(
+                f"Invalid range: a known bad commit is an ancestor of {good_commit}."))
             sys.exit(1)
         goods.add(good_commit)
 
     def add_to_bads(bad_commit: str) -> None:
         if any(git.is_ancestor(bad_commit, good_commit) for good_commit in goods):
-            print(f"Invalid range: {bad_commit} is an ancestor of known good commit.")
+            bad_commit = git.get_short_name(bad_commit)
+            print(terminal.error(
+                f"Invalid range: {bad_commit} is an ancestor of known good commit."))
             sys.exit(1)
         bads.add(bad_commit)
 
@@ -456,11 +490,13 @@ def _determine_flexible_args(
             if github_number != -1:
                 if is_issue:
                     print("Interpreting", who_knows, "as an issue number.")
-                    print("Issue link:", project_manager.ISSUES_URL + str(github_number))
+                    print("Issue link:", 
+                        terminal.color_key(project_manager.ISSUES_URL + str(github_number)))
                     possible_issue_number = github_number
                 else:
                     print("Interpreting", who_knows, "as a pull request number.")
-                    print("Pull request link:", project_manager.PULLS_URL + str(github_number))
+                    print("Pull request link:", 
+                        terminal.color_key(project_manager.PULLS_URL + str(github_number)))
                     pull_number = github_number
                     git.check_out_pull(pull_number)
                     pull_ref = git.get_pull_branch_name(pull_number)
@@ -476,8 +512,10 @@ def _determine_flexible_args(
             issue_flexible = who_knows
             continue
 
-        if ".." in who_knows:
+        if ".." in who_knows and not any(
+                bad in who_knows for bad in ["../", "/..", "..\\", "\\.."]):
             add_range(who_knows)
+            continue
 
         flipped = who_knows.startswith("^")
         if flipped:
@@ -498,6 +536,9 @@ def _determine_flexible_args(
                 continue
 
         _exit_if_duplicate(project, project_flexible, "project", who_knows)
+        if who_knows.isdigit():
+            print(terminal.warn(f"Interpreting {who_knows} as a project name"
+                + " since it doesn't appear to be an issue or PR."))
         project_flexible = who_knows
 
     if project_flexible is not None:
@@ -547,7 +588,8 @@ def _parse_flexible_args(
                 ref = git.get_pull_branch_name(pull_number)
             commit = git.resolve_ref(ref, fetch_if_missing=True)
             if commit == "":
-                print(f"Invalid ref: {ref} was not found.")
+                ref = terminal.color_ref(ref)
+                print(terminal.error(f"Invalid ref: {ref} was not found."))
                 sys.exit(1)
 
     if execution_args is None:
@@ -555,39 +597,54 @@ def _parse_flexible_args(
 
     if project is None or project == "":
         project = project_manager.get_mrp(issue_number)
-        if project == "" and "{PROJECT}" in execution_args:
-            print("Execution arguments require a project but none was provided.")
+        if project == "":
+            print(terminal.error("Unexpected error acquiring a project."))
             sys.exit(1)
     elif not project.startswith("http"):
         project_name_path = project_manager.get_project_path(project)
         if project_name_path != "" and os.path.exists(project_name_path):
             project = project_name_path
-        else:
+        elif os.path.exists(storage.resolve_relative_to(project, _ORIGINAL_WD)):
             project = storage.resolve_relative_to(project, _ORIGINAL_WD)
-            if not os.path.exists(project):
-                print(f"Project \"{project}\" does not exist.")
-                response = input("Create one there now? [y/N]: ")
+            project_file = project_manager.find_project_file(project)
+            if project_file != "" and project_file is not None:
+                project = project_file
+        else:
+            if "/" in project or "\\" in project:
+                print(f"Could not find a project at {terminal.color_key(project)}.")
+                response = input("Create one there now? [y/"
+                    + terminal.color_key("N") + "]: ")
                 if response.strip().lower().startswith("y"):
+                    project = storage.resolve_relative_to(project, _ORIGINAL_WD)
                     os.mkdir(project)
                     project_manager.create_project_file(project)
                 else:
                     sys.exit(1)
+            else:
+                print(f"Could not find a project named {terminal.color_key(project)}.")
+                response = input("Create one now? [y/"
+                    + terminal.color_key("N") + "]: ")
+                if response.strip().lower().startswith("y"):
+                    project = project_manager.create_project(project)
+                    if project == "":
+                        print(terminal.error("Failed to create project."))
+                        sys.exit(1)
+                else:
+                    sys.exit(1)
 
     if project.endswith(".zip"):
+        project_name = project_manager.get_project_name_from_issue_or_file(issue_number, project)
         if project.startswith("http"):
-            if not project_manager.download_project(project, str(issue_number)):
-                print("Failed to download zip file.")
+            if not project_manager.download_project(project, project_name):
+                print(terminal.error("Failed to download zip file."))
                 sys.exit(1)
-            project = project_manager.get_project_path(str(issue_number))
+            project = project_manager.get_project_path(project_name)
         else:
-            project = project_manager.extract_project(project, str(issue_number))
+            project = project_manager.extract_project(project, project_name)
         if project == "":
             sys.exit(1)
-    elif project.endswith("project.godot"):
+    if project.endswith("project.godot"):
         project = project[:-len("project.godot")]
-
-    if "{PROJECT}" in execution_args:
-        execution_args = execution_args.replace("{PROJECT}", "./")
 
     return execution_args, project, issue_number, commit, goods, bads
 
@@ -604,6 +661,7 @@ def _get_range_error(
     else:
         start_commit = git.resolve_ref(start_ref, fetch_if_missing=True)
         if start_commit == "":
+            start_ref = terminal.color_ref(start_ref)
             return f"Invalid range: start commit ({start_ref}) was not found."
 
     end_ref = end_ref.strip()
@@ -613,14 +671,17 @@ def _get_range_error(
     else:
         end_commit = git.resolve_ref(end_ref, fetch_if_missing=True)
         if end_commit == "":
+            end_ref = terminal.color_ref(end_ref)
             return f"Invalid range: end commit ({end_ref}) was not found."
 
     if start_ref != "" and end_ref != "" and not git.is_ancestor(start_commit, end_commit):
         if allow_nonancestor:
+            start_ref = git.get_short_name(start_ref)
+            end_ref = git.get_short_name(end_ref)
             return f"Invalid range: start ({start_ref}) is not an ancestor of end ({end_ref})."
         else:
-            print("Range start is not an ancestor of range end."
-                + " This is probably fine for a bisect, continuing.")
+            print(terminal.warn("Range start is not an ancestor of range end."
+                + " This is probably fine for a bisect, continuing."))
     return None
 
 
@@ -629,12 +690,13 @@ def _get_range_parts(
         allow_empty: bool = False,
         allow_nonancestor: bool = False) -> tuple[str, str]:
     if ref_range.count("..") != 1:
-        print("Range must be in the format \"start_ref..end_ref\".")
+        print(terminal.error("Range must be in the format "
+            + terminal.color_key("START_REF..END_REF") + "."))
         sys.exit(1)
     start_ref, end_ref = tuple(part.strip() for part in ref_range.split(".."))
     range_error = _get_range_error(start_ref, end_ref, allow_empty)
     if range_error is not None:
-        print(range_error)
+        print(terminal.error(range_error))
         sys.exit(1)
     return (
         git.resolve_ref(start_ref) if start_ref != "" else "",
@@ -658,7 +720,8 @@ def _get_commit_list_from_ranges(ref_ranges: Optional[list[str]]) -> list[str]:
                 commit_list.append(commit)
 
     if len(commit_list) == 0:
-        print("Invalid range: there were no commits found in the update range(s).")
+        print(terminal.error(
+            "Invalid range: there were no commits found in the update range(s)."))
         sys.exit(1)
 
     return commit_list

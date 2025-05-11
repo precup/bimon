@@ -13,7 +13,7 @@ from src.config import Configuration
 
 def main() -> None:
     if sys.version_info < (3, 12):
-        print(terminal.error("BiMon requires Python 3.12 or higher. The future is now."))
+        print("BiMon requires Python 3.12 or higher. The future is now.")
         sys.exit(1)
 
     original_wd = os.getcwd()
@@ -27,7 +27,7 @@ def main() -> None:
         if len(sys.argv) == 1:
             clean_args = ["--help"]
         else:
-            print(terminal.error(f"Unrecognized command {sys.argv[1]}. Use --help for help."))
+            print(f"Unrecognized command {sys.argv[1]}. Use --help for help.")
             return
 
     args = parser.parse_args(clean_args)

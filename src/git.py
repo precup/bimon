@@ -8,29 +8,38 @@ from typing import Optional
 
 from src import storage
 from src import terminal
-from src.config import Configuration
+from src.config import Configuration, PrintMode
 
 _CACHE_NAME = "git_cache"
 _PRECACHE_NAME = "git_precache"
+_UPDATES_PER_SAVE = 100
 
-_commit_time_cache = {}
-_child_cache = {}
-_parent_cache = {}
+_commit_time_precache: dict[str, int] = {}
+_parent_precache: dict[str, set[str]] = {}
+_diff_precache: dict[str, dict[str, int]] = {}
+
+_commit_time_cache: dict[str, int] = {}
+_child_cache: dict[str, set[str]] = {}
+_parent_cache: dict[str, set[str]] = {}
 _diff_cache: dict[str, dict[str, int]] = {}
-_diff_precache: dict[str, dict[str, int]]  = {}
 _already_fetched = False
 _cache_loaded = True
-_diffs_added = 0
+_cache_updates = 0
+
 
 
 def load_cache() -> None:
-    _load_cache(_PRECACHE_NAME)
-    _load_cache(_CACHE_NAME)
+    _load_cache(_PRECACHE_NAME, _commit_time_precache, _parent_precache, _diff_precache)
+    _load_cache(_CACHE_NAME, _commit_time_cache, _parent_cache, _diff_cache)
     global _cache_loaded
     _cache_loaded = True
 
 
-def _load_cache(cache_name: str) -> None:
+def _load_cache(
+        cache_name: str, 
+        commit_time_cache: dict[str, int], 
+        parent_cache: dict[str, set[str]], 
+        diff_cache: dict[str, dict[str, int]]) -> None:
     cache_str = storage.load_state(cache_name)
     section = 0
     for line in cache_str.splitlines():
@@ -39,23 +48,24 @@ def _load_cache(cache_name: str) -> None:
             continue
         parts = line.strip().split()
         if section == 0:
-            _commit_time_cache[parts[0]] = int(parts[1])
+            commit_time_cache[parts[0]] = int(parts[1])
         elif section == 1:
             src_commit, dst_commit = parts[0], parts[1]
             if src_commit > dst_commit:
                 src_commit, dst_commit = dst_commit, src_commit
-            if src_commit not in _diff_cache:
-                _diff_cache[src_commit] = {}
-            _diff_cache[src_commit][dst_commit] = int(parts[2])
+            if src_commit not in diff_cache:
+                diff_cache[src_commit] = {}
+            diff_cache[src_commit][dst_commit] = int(parts[2])
         elif section == 2:
             _child_cache[parts[0]] = set(parts[1:])
-        elif section == 2:
-            _parent_cache[parts[0]] = set(parts[1:])
+        elif section == 3:
+            parent_cache[parts[0]] = set(parts[1:])
 
 
 def save_cache(overwrite: bool = False) -> None:
     if not _cache_loaded and not overwrite:
         return
+    _cache_updates = 0
     _save_cache(_CACHE_NAME, _commit_time_cache, _diff_cache, _child_cache, _parent_cache)
 
 
@@ -68,18 +78,24 @@ def delete_cache(dry_run: bool = False) -> int:
             if dry_run:
                 print(f"Would delete {cache_path}")
             else:
-                if Configuration.PRINT_MODE == Configuration.PrintMode.VERBOSE:
+                if Configuration.PRINT_MODE != PrintMode.QUIET:
                     print(f"Deleting {cache_path}")
                 os.remove(cache_path)
             deleted += 1
 
     delete_single_cache(_CACHE_NAME)
-    delete_single_cache(_PRECACHE_NAME)
+    # delete_single_cache(_PRECACHE_NAME)
     return deleted
 
 
 def save_precache() -> None:
-    _save_cache(_PRECACHE_NAME, _commit_time_cache, _diff_precache, {}, _parent_cache)
+    merged_diff_cache = dict(_diff_cache)
+    merged_diff_cache.update(_diff_precache)
+    merged_time_cache = dict(_commit_time_cache)
+    merged_time_cache.update(_commit_time_precache)
+    merged_parent_cache = dict(_parent_cache)
+    merged_parent_cache.update(_parent_precache)
+    _save_cache(_PRECACHE_NAME, merged_time_cache, merged_diff_cache, {}, merged_parent_cache)
 
 
 def _save_cache(
@@ -111,21 +127,29 @@ def update_neighbors(commits: Optional[set[str]] = None) -> None:
         should_update = True
     else:
         should_update = not all(
-            commit in _parent_cache and commit in _child_cache for commit in commits
+            (commit in _parent_cache or commit in _parent_precache) and commit in _child_cache
+            for commit in commits
         )
     if should_update:
-        for flag, cache in (("--parents", _parent_cache), ("--children", _child_cache)):
+        updates_made = 0
+        for flag, cache in [("--children", _child_cache), ("--parents", _parent_cache)]:
             lines = get_git_output(["rev-list", "--use-bitmap-index", flag, "--all"]).splitlines()
             for line in lines:
                 parts = line.split()
-                cache[parts[0]] = set(parts[1:])
+                if flag != "--parents" or parts[0] not in _parent_precache:
+                    cache[parts[0]] = set(parts[1:])
+                    updates_made += 1
 
-        save_cache()
+        if commits is None:
+            save_cache()
+        elif updates_made > 0:
+            _mark_cache_update(updates_made)
 
 
-def _get_neighbors(commit: str) -> set[str]:
+def get_neighbors(commit: str) -> set[str]:
     update_neighbors({commit})
-    return _child_cache[commit] | _parent_cache[commit]
+    parent_cache = _parent_precache if commit in _parent_precache else _parent_cache
+    return _child_cache[commit] | parent_cache[commit]
 
 
 def sort_commits(commits_to_sort: list[str]) -> list[str]:
@@ -165,7 +189,7 @@ def get_similar_commit(target_commit: str, possible_commits: set[str]) -> str:
             best_diff = total
             best = curr
             continue
-        for neighbor in _get_neighbors(curr):
+        for neighbor in get_neighbors(curr):
             diff = get_diff_size(curr, neighbor)
             neighbor_total = total + diff
             if best != "" and neighbor_total >= best_diff:
@@ -179,6 +203,9 @@ def get_similar_commit(target_commit: str, possible_commits: set[str]) -> str:
 def clone(repository: str, target: str) -> bool:
     try:
         os.system(f"git clone {repository} {target}")
+        if not 'builds' in repository:
+            _cache_clear()
+            _already_fetched = True
         return True
     except Exception:
         return False
@@ -192,9 +219,10 @@ def check_out(rev: str) -> None:
     get_git_output(["checkout", "-q", rev])
 
 
-def check_out_pull(pull_number: int, branch_name = Optional[str]) -> None:
+def check_out_pull(pull_number: int, branch_name: Optional[str] = None) -> None:
     if branch_name is None:
         branch_name = get_pull_branch_name(pull_number)
+    get_git_output(["checkout", "--detach"])
     get_git_output(["fetch", "origin", f"+pull/{pull_number}/head:" + branch_name])
     check_out(branch_name)
 
@@ -242,21 +270,25 @@ def get_git_output(
 
 
 def get_all_descendants(ref: str) -> set[str]:
-    return _get_all_relative_types(ref, _child_cache)
+    return _get_all_relative_types(ref, _child_cache, {})
 
 
 def get_all_ancestors(ref: str) -> set[str]:
-    return _get_all_relative_types(ref, _parent_cache)
+    return _get_all_relative_types(ref, _parent_cache, _parent_precache)
 
 
-def _get_all_relative_types(ref: str, relative_cache: dict[str, set[str]]) -> set[str]:
+def _get_all_relative_types(
+        ref: str, 
+        relative_cache: dict[str, set[str]], 
+        relative_precache: dict[str, set[str]]) -> set[str]:
     commit = resolve_ref(ref)
     seen = {commit}
     queue = deque([commit])
     while queue:
         curr = queue.popleft()
         update_neighbors({curr})
-        for parent in relative_cache[curr]:
+        cache = relative_precache if curr in relative_precache else relative_cache
+        for parent in cache[curr]:
             if parent not in seen:
                 seen.add(parent)
                 queue.append(parent)
@@ -265,20 +297,28 @@ def _get_all_relative_types(ref: str, relative_cache: dict[str, set[str]]) -> se
 
 def get_commit_time(ref: str) -> int:
     commit = resolve_ref(ref)
+    if commit in _commit_time_precache:
+        return _commit_time_precache[commit]
+
     if commit not in _commit_time_cache:
         time_output = get_git_output(["show", "-s", "--format=%ct", commit])
         if time_output.isdigit():
             _commit_time_cache[commit] = int(time_output)
+            _mark_cache_update()
         else:
             return -1
     return _commit_time_cache[commit]
 
 
 def get_commit_times(refs: list[str]) -> dict[str, int]:
+    refs = list(set(refs))
     ref_commits = {
         ref: resolve_ref(ref) for ref in refs
     }
-    missing_refs = [ref for ref, commit in ref_commits.items() if commit not in _commit_time_cache]
+    missing_refs = [
+        ref for ref, commit in ref_commits.items() 
+        if commit not in _commit_time_cache and commit not in _commit_time_precache
+    ]
     if len(missing_refs) > 0:
         lines = get_git_output(["show", "-s", "--format=%ct"] + refs).split()
         for i, line in enumerate(lines):
@@ -286,8 +326,12 @@ def get_commit_times(refs: list[str]) -> dict[str, int]:
                 _commit_time_cache[ref_commits[refs[i]]] = int(line)
             else:
                 return {}
+        _mark_cache_update(len(lines))
+
     return {
-        ref: _commit_time_cache[commit]
+        ref: _commit_time_precache[commit]
+        if commit in _commit_time_precache
+        else _commit_time_cache.get(commit, -1)
         for ref, commit in ref_commits.items()
     }
 
@@ -307,7 +351,7 @@ def get_short_name(ref: str, plain: bool = False) -> str:
 def get_short_log(ref: str) -> str:
     command = ["log", "--pretty=format:\"%s\"", ref, "-n", "1", "--abbrev-commit"]
     commit_message = get_git_output(command)
-    return get_short_name(ref) + " " + commit_message
+    return get_short_name(ref) + " " + terminal.color_log(commit_message)
 
 
 # TODO this should probably return an optional but whatever
@@ -336,6 +380,8 @@ def _resolve_ref_uncached(ref: str) -> str:
 
 @functools.lru_cache(maxsize=None)
 def _resolve_ref_cached(ref: str) -> str:
+    if ref in _commit_time_cache or ref in _commit_time_precache:
+        return ref
     return _resolve_ref_uncached(ref)
 
 
@@ -374,63 +420,13 @@ def _get_commit_list(
     return commit_list
 
 
-def get_bounded_commits(
-        ancestor_refs: set[str],
-        descendant_refs: set[str],
-        path_spec: Optional[str] = None,
-        before: int = -1,
-        ancestor_exclusive: bool = False,
-        descendant_exclusive: bool = False) -> list[str]:
-    ordered_commits = get_commit_list("", "", path_spec, before)
-    all_commits = set(ordered_commits)
-
-    for refs, get_fn, exclusive in (
-            (ancestor_refs, get_all_ancestors, ancestor_exclusive),
-            (descendant_refs, get_all_descendants, descendant_exclusive)):
-        commits = {resolve_ref(ref) for ref in ancestor_refs}
-        for commit in commits:
-            all_commits -= get_fn(commit)
-        if not exclusive:
-            all_commits |= commits
-
-    return [commit for commit in ordered_commits if commit in all_commits]
-
-
-def _get_interesting_counts(
-        interesting: set[str],
-        forward_sets: dict[str, set[str]],
-        backward_sets: dict[str, set[str]],
-        boundary_commits: set[str]) -> tuple[dict[str, int], dict[str, int]]:
-    interesting_counts: dict[str, int] = {}
-    culled_counts: dict[str, int] = {}
-    # unculled_counts: dict[str, int] = {}
-    queue = deque(commit for commit, neighbors in backward_sets.items() if len(neighbors) == 0)
-    added = set(queue)
-    while len(queue) > 0:
-        curr = queue.popleft()
-
-        interesting_counts[curr] = 1 if curr in interesting else 0
-        culled_counts[curr] = 0
-        # unculled_counts[curr] = 0
-
-        for neighbor in backward_sets[curr]:
-            interesting_counts[curr] += interesting_counts[neighbor]
-        #     culled_counts[curr] += culled_counts[neighbor]
-        #     unculled_counts[curr] += unculled_counts[neighbor]
-
-        # if curr in boundary_commits:
-        #     culled_counts[curr] += 1 + unculled_counts[curr]
-        #     unculled_counts[curr] = 0
-        # else:
-        #     unculled_counts[curr] += 1
-
-        for neighbor in forward_sets[curr]:
-            if (all(backward in interesting_counts for backward in backward_sets[neighbor])
-                and neighbor not in added):
-                queue.append(neighbor)
-                added.add(neighbor)
-
-    return interesting_counts, culled_counts
+def get_parents(ref: str) -> set[str]:
+    commit = resolve_ref(ref)
+    if commit in _parent_precache:
+        return _parent_precache[commit]
+    if commit not in _parent_cache:
+        update_neighbors({commit})
+    return _parent_cache[commit]
 
 
 def get_bisect_commits(
@@ -466,62 +462,6 @@ def get_bisect_steps_from_remaining(remaining: int) -> float:
         remaining = (remaining + 1) // 2
 
 
-def get_bisect_commits_with_compile_counts(
-        good_refs: set[str],
-        bad_refs: set[str],
-        path_spec: Optional[str] = None,
-        boundary_commits: set[str] = set(),
-        before: int = -1) -> list[tuple[str, float]]:
-    import time
-    start_time = time.time()
-    interesting_commit_list = get_bounded_commits(
-        good_refs, bad_refs, path_spec, before, ancestor_exclusive=True
-    )
-    if len(bad_refs) == 0:
-        interesting_commit_list = interesting_commit_list[::-1]
-
-    if len(bad_refs) == 0 or len(good_refs) == 0:
-        return [
-            (commit, -1) for commit in interesting_commit_list
-        ]
-
-    interesting_commits = set(interesting_commit_list)
-    start_time = time.time()
-    descendant_interesting_counts, descendant_culled_counts = _get_interesting_counts(
-        interesting_commits, _child_cache, _parent_cache, boundary_commits)
-    start_time = time.time()
-    ancestor_interesting_counts, ancestor_culled_counts = _get_interesting_counts(
-        interesting_commits, _parent_cache, _child_cache, boundary_commits)
-    culled_counts = {
-        commit: ancestor_culled_counts[commit] + descendant_culled_counts[commit]
-        for commit in descendant_culled_counts
-    }
-
-    interesting_compiles = {}
-    for commit in interesting_commits:
-        if commit in boundary_commits:
-            interesting_compiles[commit] = 0.0
-            for parent in _parent_cache[commit]:
-                if parent not in boundary_commits:
-                    interesting_compiles[commit] += 1
-        else:
-            interesting_compiles[commit] = get_bisect_steps_from_remaining(
-                len(interesting_commits) - 1 - culled_counts[commit]
-            )
-
-    scored_commits = []
-    for commit in interesting_commits:
-        score = min(ancestor_interesting_counts[commit], descendant_interesting_counts[commit])
-        max_count = max(ancestor_culled_counts[commit], descendant_culled_counts[commit])
-        score += max_count / len(interesting_commits) # tiebreaker
-        if commit in bad_refs:
-            score -= len(interesting_commits)
-        scored_commits.append((score, commit))
-    scored_commits.sort(reverse=True)
-
-    return [(commit, interesting_compiles[commit]) for _, commit in scored_commits]
-
-
 def has_local_changes() -> bool:
     return len(get_git_output(["add", "-An"]).strip()) > 0
 
@@ -536,33 +476,42 @@ def get_tags() -> list[str]:
 
 
 def is_ancestor(possible_ancestor_ref: str, possible_descendant_ref: str) -> bool:
-    return (
-        possible_ancestor_ref != ""
-        and possible_descendant_ref != ""
-        and len(get_commit_list(possible_ancestor_ref, possible_descendant_ref)) > 0
-    )
+    if possible_ancestor_ref == "" or possible_descendant_ref == "":
+        return False
+    possible_ancestor_ref = resolve_ref(possible_ancestor_ref)
+    if possible_ancestor_ref == "":
+        return False
+    merge_base = get_merge_base(possible_ancestor_ref, possible_descendant_ref)
+    return merge_base == possible_ancestor_ref
 
 
 def get_diff_size(commit_src: str, commit_dst: str) -> int:
     if commit_src > commit_dst:
         commit_src, commit_dst = commit_dst, commit_src
 
-    for cache in (_diff_precache, _diff_cache):
-        if commit_src in cache:
-            if commit_dst in cache[commit_src]:
-                return cache[commit_src][commit_dst]
+    if commit_src in _diff_precache:
+        if commit_dst in _diff_precache[commit_src]:
+            return _diff_precache[commit_src][commit_dst]
+
+    if commit_src in _diff_cache:
+        if commit_dst in _diff_cache[commit_src]:
+            return _diff_cache[commit_src][commit_dst]
 
     retval = _get_diff_size(commit_src, commit_dst)
     if commit_src not in _diff_cache:
         _diff_cache[commit_src] = {}
     _diff_cache[commit_src][commit_dst] = retval
 
-    global _diffs_added
-    _diffs_added += 1
-    if _diffs_added % 100 == 0:
-        save_cache()
+    _mark_cache_update()
 
     return retval
+
+
+def _mark_cache_update(count: int = 1) -> None:
+    global _cache_updates
+    _cache_updates += count
+    if _cache_updates % _UPDATES_PER_SAVE == 0:
+        save_cache()
 
 
 def _get_diff_size(ref_src: str, ref_dst: str) -> int:
@@ -587,8 +536,8 @@ def _get_diff_size(ref_src: str, ref_dst: str) -> int:
 def minimal_parents(parents: set[str]) -> set[str]:
     return {
         commit for commit in parents
-        if all(
-            not is_ancestor(test_commit, commit)
+        if not any(
+            is_ancestor(test_commit, commit)
             for test_commit in parents if commit != test_commit
         )
     }
@@ -597,8 +546,8 @@ def minimal_parents(parents: set[str]) -> set[str]:
 def minimal_children(children: set[str]) -> set[str]:
     return {
         commit for commit in children
-        if all(
-            not is_ancestor(commit, test_commit)
+        if not any(
+            is_ancestor(commit, test_commit)
             for test_commit in children if commit != test_commit
         )
     }
@@ -619,7 +568,6 @@ def add_tags(tags: dict[str, str]) -> None:
 
 
 def _cache_clear() -> None:
-    _parent_cache.clear()
     _child_cache.clear()
     update_neighbors(None)
     _get_commit_list.cache_clear()

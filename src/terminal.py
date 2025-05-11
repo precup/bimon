@@ -10,7 +10,6 @@ import time
 from typing import Optional
 
 from src import signal_handler
-from src import storage
 from src.config import Configuration, PrintMode
 
 if os.name == "nt":
@@ -23,15 +22,15 @@ else:
 
 DEFAULT_OUTPUT_WIDTH = 80
 MAX_OUTPUT_AUTOMATE_SCAN_LINES = 100
-ANSI_RESET = "\033[0m"
+ANSI_RESET = "\001\033[0m\002"
 ANSI_CLEAR_LINE = "\033[2K"
 
-_HISTORY_FILE = storage.get_state_filename("history")
+_HISTORY_FILE = os.path.join("state", "history") # TODO circular import avoidance
 _UNICODE_BAR_PARTS = " ▏▎▍▌▋▊▉█"
 _C437_BAR_PARTS = " ▌█"
 _UNICODE_HEIGHT_PARTS = " ▁▂▃▄▅▆▇█"
 _C437_HEIGHT_PARTS = " ░▒▓█"
-_ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_ANSI_ESCAPE = re.compile(r"\001?\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])\002?")
 _TELEPORT_RE = re.compile(r"\x1b\[\d+;(\d+)H")
 _ANSI_COLOR_MAP = {
     "black": "0;30",
@@ -83,6 +82,7 @@ def init_terminal() -> None:
     if sys.stdin.isatty():
         try:
             readline.read_history_file(_HISTORY_FILE)
+            readline.set_history_length(1000)
         except FileNotFoundError:
             pass
         atexit.register(readline.write_history_file, _HISTORY_FILE)
@@ -172,14 +172,19 @@ def _get_mark_from_lines(
         result = "good"
     if ((automate_bad is not None and automate_bad in text)
         or (automate_bad_regex is not None and automate_bad_regex.search(text) is not None)):
+        if result is not None:
+            print("Automate good and bad both matched.")
         result = "bad" if result is None else "error"
     return result
 
 
-def _process_process_output(process: PtyProcess, output_lines: list[str], cols: int) -> bool:
+def _process_process_output(
+        process: PtyProcess,
+        output_lines: list[str],
+        cols: int) -> tuple[bool, bool]:
     stdout_chunk = process.read(1024)
     if len(stdout_chunk) == 0:
-        return False
+        return False, True
 
     lines = stdout_chunk.split("\n")
     if len(lines) == 1:
@@ -189,10 +194,10 @@ def _process_process_output(process: PtyProcess, output_lines: list[str], cols: 
             output_lines[-1] += lines[0]
             line_text = "".join(new_lines[-1][0]) + new_lines[-1][1]
             print(ANSI_RESET + ANSI_CLEAR_LINE + line_text, end="", flush=True)
-            return False
+            return False, False
     output_lines[-1] += lines[0]
-    output_lines += lines[1:]
-    return True
+    output_lines.extend(lines[1:])
+    return True, False
 
 
 def _print_subwindow_lines(
@@ -261,7 +266,8 @@ def _execute_in_subwindow_pty(
     )
     while process.isalive():
         try:
-            if _process_process_output(process, output_lines, cols):
+            needs_update, should_sleep = _process_process_output(process, output_lines, cols)
+            if needs_update:
                 if mark is None and automation_on:
                     mark = _get_mark_from_lines(
                         output_lines,
@@ -272,7 +278,8 @@ def _execute_in_subwindow_pty(
                     if mark is not None:
                         process.kill(signal.SIGINT)
             else:
-                time.sleep(0.1)
+                if should_sleep:
+                    time.sleep(0.1)
                 continue
         except EOFError:
             break
@@ -289,7 +296,7 @@ def _execute_in_subwindow_pty(
             else:
                 print()
 
-        _print_subwindow_lines(
+        lines_printed = _print_subwindow_lines(
             output_lines,
             ansi_codes_seen,
             cols,
@@ -418,8 +425,8 @@ def _execute_directly(
                     automate_bad,
                     automate_bad_regex)
 
-                if mark is not None and process.isalive():
-                    process.kill(signal.SIGINT)
+                if mark is not None:
+                    process.kill()
         finally:
             if process.stdout is not None:
                 process.stdout.close()
@@ -565,7 +572,7 @@ def box_generic(lmr_chars: str, title: str = "") -> str:
 
 
 def non_ansi_len(text: str) -> int:
-    return len(_ANSI_ESCAPE.sub("", text))
+    return len(_ANSI_ESCAPE.sub("", text).replace("\001", "").replace("\002", ""))
 
 
 def progress_bar(cols: int, fraction: float) -> str:
@@ -658,7 +665,7 @@ def color_bg(text: str, color_str: str) -> str:
 def _color_by_code(text: str, color_code: str) -> str:
     if not Configuration.COLOR_ENABLED:
         return text
-    return f"\033[{color_code}m{text}" + ANSI_RESET
+    return f"\001\033[{color_code}m\002{text}" + ANSI_RESET
 
 
 def color_good(text: str) -> str:

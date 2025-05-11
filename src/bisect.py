@@ -45,6 +45,7 @@ class Bisector:
             self._old_error_commits = storage.get_compiler_error_commits()
         self._goods: set[str] = set()
         self._bads: set[str] = set()
+        self._current_bad: Optional[str] = None
         self._skips: set[str] = set()
         self._started = False
         self._phase_two = False
@@ -60,6 +61,8 @@ class Bisector:
         self._automate_exit = None
         self._automate_script = None
 
+        self._bisect_commits: Optional[list[str]] = None
+
         self._handle_time_warnings()
 
         storage.init_decompress_queue()
@@ -69,11 +72,14 @@ class Bisector:
                 "Invalid initial commit sets, use mark_command if you want error handling."
             )
 
-        self._current_commit, status = self.get_next_commit(silent=False)
-        if status == Bisector.CommandResult.ERROR:
-            raise ValueError(
-                "Initial conditions for bisect resulted in an unexpected error."
-            )
+        if len(self._goods) > 0 and len(self._bads) > 0:
+            self._current_commit, status = self.get_next_commit(silent=False)
+            if status == Bisector.CommandResult.ERROR:
+                raise ValueError(
+                    "Initial conditions for bisect resulted in an unexpected error."
+                )
+        else:
+            self._current_commit = None
 
 
     def add_commit_sets(
@@ -95,40 +101,47 @@ class Bisector:
         temp_goods.update(new_goods)
         temp_bads.update(new_bads)
 
-        temp_bads = git.minimal_parents(temp_bads)
-        temp_goods = git.minimal_children(temp_goods)
-        covered = git.minimal_parents(temp_bads | temp_goods)
-        if len(temp_bads) > 0 and len(temp_goods) > 0 and len(temp_goods - covered) == 0:
+        short_bads = git.minimal_parents(temp_bads)
+        short_goods = git.minimal_children(temp_goods)
+        covered = git.minimal_children(temp_bads | temp_goods)
+        if len(short_bads) > 0 and len(short_goods) > 0 and len(short_goods - covered) == 0:
             if not silent:
                 commit = git.get_merge_base(
-                    list(sorted(temp_goods))[0], 
-                    list(sorted(temp_bads))[0])
-                print("Warning: Good commits weren't ancestors of bad commits.")
+                    list(sorted(short_goods))[0], 
+                    list(sorted(short_bads))[0])
+                print(terminal.warn("Good commits weren't ancestors of bad commits."))
                 if commit != "":
                     commit = git.get_short_name(commit)
-                    print(f"If the number of possible commits seems too high,"
-                        + " try {commit} instead.")
+                    print("If the number of possible commits seems too high,"
+                        + f" try {commit} instead.")
 
-        for bad in temp_bads:
-            for good in temp_goods:
-                if git.is_ancestor(good, bad):
+        for bad in short_bads:
+            for good in short_goods:
+                if git.is_ancestor(bad, good):
                     good_name = git.get_short_name(good)
                     bad_name = git.get_short_name(bad)
-                    print(f"Warning: {bad_name} (bad) is an ancestor of {good_name} (good).")
-                    print("This makes the bisect impossible, please check your commits. Ignoring.")
+                    print(terminal.warn(f"{bad_name} (bad) is an ancestor of {good_name} (good)."))
+                    print(terminal.warn(
+                        "This makes the bisect impossible, please check your commits. Ignoring."))
                     return False
 
         self._goods = temp_goods
         self._bads = temp_bads
+        if len(short_bads) == 1:
+            self._current_bad = list(short_bads)[0]
+        else:
+            self._current_bad = None
         self._skips.difference_update(new_unmarks)
         self._skips.update(new_skips)
+        self._bisect_commits = None
 
         return True
 
 
     def get_next_commit(
             self,
-            silent: bool) -> tuple[Optional[str], CommandResult]:
+            silent: bool,
+            cached: bool = True) -> tuple[Optional[str], CommandResult]:
         if len(self._goods) == 0 or len(self._bads) == 0:
             if not silent:
                 types = " or ".join((["good"] if len(self._goods) == 0 else [])
@@ -136,31 +149,44 @@ class Bisector:
                 print(f"No {types} commits marked, can't calculate a bisect commit.")
             return None, Bisector.CommandResult.SUCCESS
 
-        bads = list(sorted(self._bads))
+        bads = list(sorted(git.minimal_parents(self._bads)))
         for i, bad in enumerate(bads):
             for j in range(i + 1, len(bads)):
                 merge_base = git.get_merge_base(bad, bads[j])
                 if len(merge_base) > 0:
                     if not silent:
-                        print("Bad commits weren't ancestors of each other,"
-                            + " testing the merge base just in case.")
+                        print(terminal.warn("Bad commits weren't ancestors of each other,"
+                            + " testing the merge base just in case."))
                         print("This is very likely a bad commit.")
                     return merge_base, Bisector.CommandResult.SUCCESS
 
-        if len(bads) > 1:
+        if self._current_bad is None:
             if not silent:
-                print("Warning: Multiple bad targets possible, using the first one.")
-                print("Please report, I didn't expect this to happen.")
-        bad = bads[0]
+                print(terminal.warn("Multiple bad targets possible, using the first one."))
+                print(terminal.warn("Please report, I didn't expect this to happen."))
+            bad = bads[0]
+        else:
+            bad = self._current_bad
 
-        bisect_commits = self.get_bisect_commits(self._goods, bad)
+        if cached:
+            if self._bisect_commits is None:
+                self._bisect_commits = self.get_bisect_commits(self._goods, bad)
+            bisect_commits = self._bisect_commits
+        else:
+            bisect_commits = self.get_bisect_commits(self._goods, bad)
         if len(bisect_commits) == 0:
             if not silent:
-                print("No possible commits found for those good and bad commits.")
+                print(terminal.error("No possible commits found for those good and bad commits."))
             return None, Bisector.CommandResult.ERROR
-
-        if len(bisect_commits) == 1:
-            return bisect_commits[0], Bisector.CommandResult.EXIT
+        bisect_commits = [commit for commit in bisect_commits if commit not in self._bads]
+        if len(bisect_commits) == 0:
+            valid = True
+            for parent in git.get_parents(bad):
+                if not self._path_spec and parent not in self._goods and not any(
+                        git.is_ancestor(parent, good) for good in self._goods):
+                    print(terminal.error("Only one commit left, but some of its parents are untested."))
+                    print(terminal.error("This shouldn't have happened and the results may be wrong."))
+            return bad, Bisector.CommandResult.EXIT
 
         if self._path_spec is not None and self._path_spec != "":
             all_bisect_commits = set(self.get_bisect_commits(self._goods, bad, ""))
@@ -254,7 +280,7 @@ class Bisector:
                 try:
                     self._automate_good_regex = re.compile(good)
                 except re.error:
-                    print(f"Invalid regex for good: {good}.")
+                    print(terminal.error(f"Invalid regex for good: {good}."))
                     return Bisector.CommandResult.ERROR
             else:
                 self._automate_good = good
@@ -266,7 +292,7 @@ class Bisector:
                 try:
                     self._automate_bad_regex = re.compile(bad)
                 except re.error:
-                    print(f"Invalid regex for bad: {bad}.")
+                    print(terminal.error(f"Invalid regex for bad: {bad}."))
                     return Bisector.CommandResult.ERROR
             else:
                 self._automate_bad = bad
@@ -277,8 +303,8 @@ class Bisector:
         else:
             new_crash_options = [option for option in options if option.startswith(crash)]
             if len(new_crash_options) == 0:
-                print(f"Invalid crash option: {crash} is not a valid"
-                    + " way to mark commits (good/bad).")
+                print(terminal.error(f"Invalid crash option: {crash} is not a valid"
+                    + " way to mark commits (good/bad)."))
                 return Bisector.CommandResult.ERROR
             self._automate_crash = new_crash_options[0]
 
@@ -287,8 +313,8 @@ class Bisector:
         else:
             new_exit_options = [option for option in options if option.startswith(exit)]
             if len(new_exit_options) == 0:
-                print(f"Invalid crash option: {exit} is not a valid"
-                    + " way to mark commits (good/bad).")
+                print(terminal.error(f"Invalid crash option: {exit} is not a valid"
+                    + " way to mark commits (good/bad)."))
                 return Bisector.CommandResult.ERROR
             self._automate_exit = new_exit_options[0]
 
@@ -297,17 +323,23 @@ class Bisector:
         else:
             resolved_script = storage.resolve_relative_to(script, _ORIGINAL_WD)
             if not os.path.exists(resolved_script):
-                print(f"Invalid script option: script \"{script}\" does not exist.")
+                if Configuration.COLOR_ENABLED:
+                    script = terminal.color_key(script)
+                else:
+                    script = f'"{script}"'
+                print(terminal.error(f"Invalid script option: script {script} does not exist."))
                 return Bisector.CommandResult.ERROR
             self._automate_script = resolved_script
 
         if self._current_commit is None:
+            self._started = True
             print("No current commit to test. Automatic testing will start once one is set.")
             return Bisector.CommandResult.SUCCESS
 
-        prefix = "Starting automatic testing. " if not self._started else ""
-        self._started = True
-        print(prefix + f"Launching {git.get_short_name(self._current_commit)}.")
+        if not self._started:
+            print("Starting automatic testing.")
+            self._started = True
+
         return self._launch()
 
 
@@ -325,65 +357,64 @@ class Bisector:
 
 
     def run_command(self, refs: Optional[list[str]]) -> CommandResult:
-        if refs is None:
+        if refs is None or len(refs) == 0:
             if self._current_commit is None:
-                print("Invalid command: No arguments were provided but there is"
-                    + " no current commit to use.")
+                print(terminal.error("Invalid command: No arguments were provided but there is"
+                    + " no current commit to use."))
                 return Bisector.CommandResult.ERROR
             refs = [self._current_commit]
         commits = []
         for ref in refs:
             commit = git.resolve_ref(ref)
             if commit == "":
-                print(f"Invalid ref: {ref}")
+                print(terminal.error(f"Invalid ref: {ref}"))
                 return Bisector.CommandResult.ERROR
             commits.append(commit)
 
         result = Bisector.CommandResult.SUCCESS
         for i, commit in enumerate(commits):
             if commit in self._old_error_commits:
-                print("Warning: That commit has had compiler errors in the past."
-                    + " Trying to run anyways.")
+                print(terminal.warn("That commit has had compiler errors in the past."
+                    + " Trying to run anyways."))
             elif commit in storage.get_ignored_commits():
-                print("Warning: That commit is in ignored_commits. Trying to run anyways.")
+                print(terminal.warn("That commit is in ignored_commits. Trying to run anyways."))
             self._current_commit = commit
             if i == len(commits) - 1:
                 self.queue_decompress_nexts()
-            print("Running commit", git.get_short_name(commit))
             if self._launch(single_launch=i < len(commits) - 1) == Bisector.CommandResult.ERROR:
                 result = Bisector.CommandResult.ERROR
         return result
 
 
-    def list_command(self, short: bool) -> CommandResult:
+    def list_command(self, short: bool, best: bool) -> CommandResult:
         if len(self._goods) == 0:
-            print("No good commits marked, can't calculate a commit list.")
+            print(terminal.error("No good commits marked, can't calculate a commit list."))
             return Bisector.CommandResult.ERROR
         elif len(self._bads) == 0:
-            print("No bad commits marked, can't calculate a commit list.")
+            print(terminal.error("No bad commits marked, can't calculate a commit list."))
             return Bisector.CommandResult.ERROR
 
-        bisect_commits = self.get_bisect_commits(self._goods, list(sorted(self._bads))[0])
+        bad = list(sorted(self._bads))[0] if self._current_bad is None else self._current_bad
+        if self._bisect_commits is None:
+            self._bisect_commits = self.get_bisect_commits(self._goods, bad)
+        commits = self._bisect_commits
+        if not best:
+            time_order_commits = git.get_commit_list("", bad, self._path_spec, self._end_timestamp)
+            bisect_commit_set = set(commits)
+            commits = [commit for commit in time_order_commits if commit in bisect_commit_set]
         if short:
-            print(" ".join([git.get_short_name(commit, plain=True) for commit in bisect_commits]))
+            print(" ".join([git.get_short_name(commit, plain=True) for commit in commits]))
         else:
-            if len(bisect_commits) == 0:
-                print("No possible commits found.")
+            if len(commits) == 0:
+                print(terminal.error("No possible commits found."))
                 return Bisector.CommandResult.ERROR
-            print(f"Possible commits ({len(bisect_commits)}):")
-            for commit in bisect_commits:
+            print(f"Possible commits ({len(commits)}):")
+            for commit in commits:
                 print(git.get_short_log(commit))
         return Bisector.CommandResult.SUCCESS
 
 
     def status_command(self, short: bool) -> CommandResult:
-        if len(self._goods) == 0 or len(self._bads) == 0:
-            words = ["good"] if len(self._goods) == 0 else []
-            words += ["bad"] if len(self._bads) == 0 else []
-            phrase = " or ".join(words)
-            print(f"No {phrase} commits marked, can't calculate a commit list.")
-            return Bisector.CommandResult.ERROR
-
         self.print_status_message(short)
         return Bisector.CommandResult.SUCCESS
 
@@ -393,17 +424,21 @@ class Bisector:
             print()
             return
 
-        remaining = set(self.get_bisect_commits(self._goods, list(sorted(self._bads))[0]))
+        bad = list(sorted(self._bads))[0] if self._current_bad is None else self._current_bad
+        if self._bisect_commits is None:
+            self._bisect_commits = self.get_bisect_commits(self._goods, bad)
+        remaining = set(self._bisect_commits)
         if len(remaining) == 1:
             bad_commit = list(remaining)[0]
-            print("Only one commit left, must be " + git.get_short_name(bad_commit))
-            print("https://github.com/godotengine/godot/commit/" + bad_commit)
+            print(terminal.color_good("Only one commit left,"), 
+                " it must be " + git.get_short_name(bad_commit))
+            print(terminal.color_key("https://github.com/godotengine/godot/commit/" + bad_commit))
             print(git.get_short_log(bad_commit))
 
         print("\nExiting bisect interactive mode.")
 
         if len(remaining) > 1:
-            print(f"There are {len(remaining)} remaining possible commits.")
+            print(f"There are {terminal.color_key(str(len(remaining)))} remaining possible commits.")
             if len(self._goods | self._bads | self._skips) > 0:
                 print("You can resume with:")
                 self._print_resume_sets()
@@ -416,28 +451,33 @@ class Bisector:
 
     def print_status_message(self, short: bool = True) -> None:
         if len(self._goods) > 0 and len(self._bads) > 0:
-            remaining = set(git.get_bisect_commits(
-                good_refs=self._goods,
-                bad_ref=list(sorted(self._bads))[0],
-                path_spec=self._path_spec,
-                before=self._end_timestamp))
+            bad = list(sorted(self._bads))[0] if self._current_bad is None else self._current_bad
 
-            print("There are", len(remaining), "remaining possible commits.")
+            if self._bisect_commits is None:
+                self._bisect_commits = self.get_bisect_commits(self._goods, bad)
+            remaining = set(self._bisect_commits)
+
+            print(f"There are {terminal.color_key(str(len(remaining)))} remaining possible commits.")
             steps_left = git.get_bisect_steps_from_remaining((len(remaining)))
-            steps_text = f"~{steps_left:01f} steps "
-            print(steps_text + " remaining. Next commit to test:")
-
-            if self._current_commit is None:
-                print("No current commit set.")
-            else:
-                print(git.get_short_log(self._current_commit))
+            steps_text = f"~{steps_left:.01f} steps"
+            print(terminal.color_key(steps_text) + " remaining. Next commit to test:")
+        elif len(self._goods) > 0:
+            print("Waiting for initial bad commit.")
+        elif len(self._bads) > 0:
+            print("Waiting for initial good commit.")
         else:
             print("Waiting for initial good and bad commits.")
+
+        if self._current_commit is None:
+            print("No current commit set.")
+        else:
+            print(git.get_short_log(self._current_commit))
 
         if not short and len(self._goods | self._bads | self._skips) > 0:
             print()
             print("Minimal sets of marked commits:")
             self._print_resume_sets()
+        print()
 
 
     def queue_decompress_nexts(self) -> None:
@@ -456,23 +496,27 @@ class Bisector:
                 continue
 
             new_goods = inherited_goods | {current_commit}
-            self._goods |= new_goods
-            good_next_commit, status = self.get_next_commit(silent=True)
-            succeeded = good_next_commit is not None and status == Bisector.CommandResult.SUCCESS
-            if succeeded and good_next_commit not in to_decompress:
-                to_decompress.append(good_next_commit)
-                queue.append((good_next_commit, current_layer + 1, new_goods, inherited_bads))
-            self._goods -= new_goods
+            if git.minimal_parents(new_goods) != git.minimal_parents(self._goods):
+                self._goods |= new_goods
+                good_next_commit, status = self.get_next_commit(silent=True, cached=False)
+                succeeded = good_next_commit is not None and status == Bisector.CommandResult.SUCCESS
+                if succeeded and good_next_commit not in to_decompress:
+                    to_decompress.append(good_next_commit)
+                    queue.append((good_next_commit, current_layer + 1, new_goods, inherited_bads))
+                self._goods -= new_goods
 
-            new_bads = {current_commit}
-            old_bads = self._bads
-            self._bads = new_bads
-            bad_next_commit, status = self.get_next_commit(silent=True)
-            succeeded = bad_next_commit is not None and status == Bisector.CommandResult.SUCCESS
-            if succeeded and bad_next_commit not in to_decompress:
-                to_decompress.append(bad_next_commit)
-                queue.append((bad_next_commit, current_layer + 1, inherited_goods, new_bads))
-            self._bads = old_bads
+            old_current_bad = self._current_bad
+            new_bads = inherited_bads | {current_commit}
+            if git.minimal_parents(new_bads) != git.minimal_parents(self._bads):
+                self._bads |= new_bads
+                self._current_bad = current_commit
+                bad_next_commit, status = self.get_next_commit(silent=True, cached=False)
+                succeeded = bad_next_commit is not None and status == Bisector.CommandResult.SUCCESS
+                if succeeded and bad_next_commit not in to_decompress:
+                    to_decompress.append(bad_next_commit)
+                    queue.append((bad_next_commit, current_layer + 1, inherited_goods, new_bads))
+                self._bads -= new_bads
+                self._current_bad = old_current_bad
 
         storage.set_decompress_queue(to_decompress)
 
@@ -499,8 +543,8 @@ class Bisector:
         for sentence in sentences:
             if len(sentence) == 1:
                 if self._current_commit is None:
-                    print(f"Invalid command: {sentence[0]} has no arguments"
-                        + " but there is no current commit to use.")
+                    print(terminal.error(f"Invalid command: {sentence[0]} has no arguments"
+                        + " but there is no current commit to use."))
                     return (set(), set(), set(), set())
                 sentence.append(self._current_commit)
             sentence_key = sentence[0][0].lower()
@@ -508,11 +552,12 @@ class Bisector:
             for commit in commits:
                 if commit == "":
                     bad_refs = [ref for ref in sentence[1:] if git.resolve_ref(ref) == ""]
-                    print("Unresolvable ref(s): " + " ".join(bad_refs))
+                    print(terminal.error("Unresolvable ref(s): " + " ".join(bad_refs)))
                     return (set(), set(), set(), set())
             for key, value in new_sets.items():
                 if key != sentence_key and len(commits.intersection(value)) > 0:
-                    print("Invalid command: Some commits were marked multiple times.")
+                    print(terminal.error(
+                        "Invalid command: Some commits were marked multiple times."))
                     return (set(), set(), set(), set())
             new_sets[sentence_key].update(commits)
 
@@ -529,17 +574,17 @@ class Bisector:
         already_marked.difference_update(new_sets["u"])
         if len(already_marked) > 0:
             if len(sentences) > 1 or len(sentences[0]) > 2:
-                print(f"Warning: {len(already_marked)} of those commits were", end="")
+                prefix = f"{len(already_marked)} of those commits were"
             else:
-                print("Warning: That commit was", end="")
-            print(" already marked as something else. Updating anyways.")
+                prefix = "That commit was"
+            print(terminal.warn(prefix + " already marked as something else. Updating anyways."))
 
         return tuple(new_sets[command[0]] for command in commands)
 
 
     def _launch(self, single_launch: bool = False) -> CommandResult:
         if self._current_commit is None:
-            print("Internal Error: No current commit is set, nothing to run.")
+            print(terminal.error("No current commit is set, nothing to run."))
             return Bisector.CommandResult.ERROR
         result = execution.launch_with_automation(
             self._current_commit,
@@ -558,8 +603,8 @@ class Bisector:
 
         automark_command = []
         for name, prefix, suffix in [
-                ("good", "marking commit", " as good."),
-                ("bad", "marking commit", " as bad."),
+                ("good", "marking commit", " as " + terminal.color_good("good") + "."),
+                ("bad", "marking commit", " as " + terminal.color_bad("bad") + "."),
                 ("skip", "marking commit", " as skipped."),
                 ("unmark", "unmarking commit", "."),
             ]:
@@ -570,7 +615,7 @@ class Bisector:
 
         if result == "error":
             if self._started:
-                print("Automatic testing failed due to an error while executing. Pausing.")
+                print(terminal.warn("Automatic testing failed due to an error while executing. Pausing."))
                 self._started = False
             return Bisector.CommandResult.ERROR
         elif len(automark_command) > 0:
@@ -583,9 +628,9 @@ class Bisector:
 
 
     def _handle_time_warnings(self) -> None:
-        commit_list = self._commit_list(path_spec=None, before=-1)
+        commit_list = self._commit_list(path_spec="", before=-1)
         if len(commit_list) == 0:
-            print("No commits found in the repository. This should never happen.")
+            print(terminal.error("No commits found in the repository. This should never happen."))
             raise RuntimeError("No commits found in the repository.")
 
         latest_known_time = git.get_commit_time(commit_list[-1])
@@ -680,8 +725,8 @@ class Bisector:
                 self._started = False
                 self._has_unstarted = True
 
-        if not silent:
-            print(output, end="")
+            if not silent:
+                print(terminal.warn(output), end="")
 
         return possible_next_commits
 

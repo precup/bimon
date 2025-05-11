@@ -14,7 +14,7 @@ I wanted to be able to cover everything back to the last major release, which at
 
 When I first started looking into this, my clean builds were taking 9 minutes. The current official Linux build is compressed to about 58 MB. Multiplying those by 20k gives you 140 days and 1.2 TB, neither of which are acceptable. 
 
-However, reality is much kinder, for once. With the right flags and incremental builds, I'm averaging 37 seconds and 7.8 MB per version. Multiplying those by 20k gives you 9 days and 160 GB, which is good enough to be usable. Extraction times are ~2 seconds on my machine, a little slow but not awful.
+However, reality is much kinder, for once. With the right flags and incremental builds, I'm averaging 37 seconds and 7.8 MB per version. Multiplying those by 20k gives you 9 days and 160 GB, which is good enough to be usable. Extraction times are ~2 seconds on my machine, a little slow but not awful. For the ~2500 commits back to the last minor version, that's just over a day and about 20 GB, pretty chill.
 
 1 in N passes have significantly worse performance on both speed and size because the commits are less similar, so it's hard to justify for small N (<= 8) compared to just compiling everything.
 
@@ -114,7 +114,7 @@ To run BiMon, use `./bimon.py [-q/-v/-l] [--color=yes/no] [--config=FILE] [-i] C
 - `clean` - Offers a variety of ways to clean up potentially wasted space.
     - `--duplicates`: Delete uncompressed versions that are duplicates of compressed versions
     - `--build-artifacts`: Delete build files with `scons --clean`
-    - `--caches`: Delete internal caches, mostly stored git information
+    - `--caches`: Delete internal caches, mostly stored git information that may take a long time to regenerate
     - `--temp-files`: Delete temporary files used during processing
     - `--projects`: Delete all projects. Use with caution.
     - `--loose-files`: Delete any unrecognized files in the versions directory. Use with caution.
@@ -175,6 +175,7 @@ When you run the `bisect` command, the program will enter an interactive mode. A
     - `REF`: The version to run. If not provided, defaults to the current commit.
 - `list` - Lists all remaining possible commits.
     - `--short`: Print only shortened commit SHAs and no log information
+    - `--best`: Sort by best bisect score instead of commit date
 - `status` - Prints summary information about the current bisect.
     - `--short`: Print only the primary status information
 - `set-params EXECUTION_PARAMETERS` - Updates the parameters Godot will be run with.
@@ -187,8 +188,9 @@ Bisection proceeds in two phases, where the range is first narrowed down as much
 > [!TIP]
 > - `good`, `bad`, `skip`, and `unmark` can be combined on the same line (`g 4.4-dev1 b 4.5-stable`)
 > - `automate` with no arguments is still useful since you won't need to use `run` anymore
-> - You can use the other flags of `automate` to mark commits using `--script`
 > - `automate` calls overwrite each other
+> - For an example of automation with a script, try `auto -s example_script.py -g "mark good" -b "mark bad"`
+> - Multiple files in the path spec can be given with `--path-spec="filename1 filename2"`
 
 ## TODO
 
