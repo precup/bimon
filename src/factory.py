@@ -371,10 +371,18 @@ def compile(
     return not Configuration.COMPRESSION_ENABLED or compress(compiled_versions, retry_compress)
 
 
-def _get_paths_from_ARTIFACT_PATHS() -> Optional[list[str]]:
+def _get_paths_from_artifact_paths() -> Optional[list[str]]:
     abs_workspace_path = os.path.abspath(Configuration.WORKSPACE_PATH)
     paths = []
     for archive_path in Configuration.ARTIFACT_PATHS:
+        if "{EXECUTABLE_PATH}" in archive_path:
+            executable_path = storage.find_executable(
+                abs_workspace_path, Configuration.EXECUTABLE_PATH, Configuration.EXECUTABLE_REGEX
+            )
+            if executable_path is None:
+                print(terminal.error("Executable path not found after compilation."))
+                return None
+            archive_path = archive_path.replace("{EXECUTABLE_PATH}", glob.escape(executable_path))
         if glob.escape(archive_path) == archive_path:
             resolved_archive_path = os.path.join(Configuration.WORKSPACE_PATH, archive_path)
             if not os.path.exists(resolved_archive_path):
@@ -408,7 +416,7 @@ def cache() -> bool:
     os.makedirs(version_path, exist_ok=True)
 
     abs_workspace_path = os.path.abspath(Configuration.WORKSPACE_PATH)
-    transfers = _get_paths_from_ARTIFACT_PATHS()
+    transfers = _get_paths_from_artifact_paths()
     if transfers is None:
         return False
 

@@ -157,30 +157,34 @@ def get_bimon_parser(base_command: Optional[str] = None) -> ArgumentParser:
     create_parser = subparsers.add_parser("create",
         help="Creates a new project.",
         description="Creates a new named project you can use in the run and bisect commands.",
-        usage="bimon.py create [-t TITLE] NAME",
+        usage="bimon.py create [-t TITLE] [-3] NAME",
         add_help=False)
     create_parser.add_argument("-t", "--title", type=str, help=
         "The initial title for the project")
+    create_parser.add_argument("-3", dest="three", action="store_true", help=
+        "Create a Godot 3.x project. Defaults to 4.x.")
     create_parser.add_argument("name", help=
         "The name to refer to this project by for other commands")
     add_messages("create", create_parser)
     create_parser.set_defaults(func=lambda args:
-        commands.create_command(args.name, args.title))
+        commands.create_command(args.name, args.three, args.title))
 
     export_parser = subparsers.add_parser("export",
         help="Export a zipped version of a project for easy uploading.",
         description="Exports a project from the \"projects\" folder to a zip for uploading.",
-        usage="bimon.py export [-t TITLE] NAME TARGET",
+        usage="bimon.py export [-t TITLE] [-a] NAME TARGET",
         add_help=False)
     export_parser.add_argument("-t", "--title", type=str, default=None, help=
         "Overwrite the project title with \"TITLE\" on the exported project")
+    export_parser.add_argument("-a", "--as-is", action="store_true", help=
+        "Include the .godot folder, which is excluded by default")
     export_parser.add_argument("name", help=
         "The name of the project to export. Often an issue number.")
     export_parser.add_argument("target", help=
         "The destination zip to export to")
     add_messages("export", export_parser)
     export_parser.set_defaults(func=lambda args:
-        commands.export_command(args.name, args.target, args.title))
+        commands.export_command(args.name, args.target, args.title, args.as_is))
 
     clean_parser = subparsers.add_parser("clean",
         help="Delete unneeded files.",

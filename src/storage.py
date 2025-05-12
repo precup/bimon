@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import string
 import tarfile
@@ -150,6 +151,23 @@ def _extract_version(version: str, target: str) -> bool:
     if target != "" and target != version_path:
         shutil.copytree(version_path, target, dirs_exist_ok=True)
     return True
+
+
+def find_executable(
+        base_folder: str,
+        likely_location: str,
+        backup_path_regex: re.Pattern) -> Optional[str]:
+    likely_location = os.path.join(base_folder, likely_location)
+    if os.path.exists(likely_location):
+        return likely_location
+
+    for root, _, files in os.walk(base_folder):
+        for file in files:
+            full_path = os.path.join(root, file)
+            if backup_path_regex.search(full_path):
+                return full_path
+
+    return None
 
 
 def clean_duplicate_files(

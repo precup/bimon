@@ -124,23 +124,6 @@ def launch_with_automation(
         no_subwindow)
 
 
-def _find_executable(
-        base_folder: str,
-        likely_location: str,
-        backup_path_regex: re.Pattern) -> Optional[str]:
-    likely_location = os.path.join(base_folder, likely_location)
-    if os.path.exists(likely_location):
-        return likely_location
-
-    for root, _, files in os.walk(base_folder):
-        for file in files:
-            full_path = os.path.join(root, file)
-            if backup_path_regex.search(full_path):
-                return full_path
-
-    return None
-
-
 def _launch_folder(
         workspace_path: str,
         execution_arguments: str,
@@ -153,8 +136,8 @@ def _launch_folder(
         automate_exit: Optional[str],
         automate_script: Optional[str],
         no_subwindow: bool = False) -> str:
-    executable_path = _find_executable(
-        workspace_path, Configuration.EXECUTABLE_PATH, Configuration.BACKUP_EXECUTABLE_REGEX
+    executable_path = storage.find_executable(
+        workspace_path, Configuration.EXECUTABLE_PATH, Configuration.EXECUTABLE_REGEX
     )
     if executable_path is None:
         workspace_path = terminal.color_key(workspace_path)

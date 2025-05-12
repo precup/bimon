@@ -102,14 +102,8 @@ class Configuration:
         # Archiving settings
         Configuration.COMPRESSION_ENABLED = config.getboolean(
             "Archiving", "compression_enabled")
-        Configuration.EXECUTABLE_PATH = config.get(
-			"Archiving", "executable_path")
         Configuration.ARTIFACT_PATHS = shlex.split(config.get(
 			"Archiving", "artifact_paths"), posix=False)
-        Configuration.ARTIFACT_PATHS = [
-            path.replace("{EXECUTABLE_PATH}", Configuration.EXECUTABLE_PATH)
-            for path in Configuration.ARTIFACT_PATHS
-        ]
         Configuration.COPY_ON_CACHE = config.getboolean(
             "Archiving", "copy_on_cache")
         Configuration.BUNDLE_SIZE = config.getint(
@@ -122,8 +116,12 @@ class Configuration:
             "Execution", "extraction_pool_size")
         Configuration.DEFAULT_EXECUTION_ARGS = config.get(
             "Execution", "default_execution_arguments")
-        Configuration.BACKUP_EXECUTABLE_REGEX = re.compile(config.get(
-            "Execution", "backup_executable_regex"))
+        Configuration.EXECUTABLE_PATH = config.get(
+			"Execution", "executable_path")
+        if config.getboolean("Execution", "executable_regex"):
+            Configuration.EXECUTABLE_REGEX = re.compile(Configuration.EXECUTABLE_PATH)
+        else:
+            Configuration.EXECUTABLE_REGEX = None
         Configuration.AUTOPURGE_DUPLICATES = config.getboolean(
             "Execution", "autoclean_duplicates")
         Configuration.AUTOPURGE_LIMIT = config.getint(

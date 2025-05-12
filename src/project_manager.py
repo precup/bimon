@@ -9,6 +9,7 @@ from typing import Optional
 import requests
 from bs4 import BeautifulSoup
 
+from src import git
 from src import storage
 from src import terminal
 from src.config import Configuration, PrintMode
@@ -135,7 +136,11 @@ def clean(projects: bool = False, temp_files: bool = False, dry_run: bool = Fals
     return clean_count
 
 
-def extract_project(zip_filename: str, project_name: str, title: Optional[str] = None) -> str:
+def extract_project(
+        zip_filename: str, 
+        project_name: str, 
+        title: Optional[str] = None, 
+        commit: Optional[str] = None) -> str:
     if project_name == "":
         print("Extracting to the sandbox folder since no project name or issue was provided.")
 
@@ -158,13 +163,17 @@ def extract_project(zip_filename: str, project_name: str, title: Optional[str] =
             "Project extraction failed, project.godot file not found in the extracted folder."))
         return ""
     if title is not None:
-        set_project_title(project_file, title)
+        set_project_title(project_file, title, commit=commit)
     elif Configuration.AUTOUPDATE_PROJECT_TITLES:
-        set_project_title(project_file, project_name, prepend_existing=True)
+        set_project_title(project_file, project_name, prepend_existing=True, commit=commit)
     return project_file
 
 
-def set_project_title(project_file: str, title: str, prepend_existing: bool = False) -> None:
+def set_project_title(
+        project_file: str, 
+        title: str, 
+        prepend_existing: bool = False,
+        commit: Optional[str] = None) -> None:
     if len(title.strip()) == 0 and prepend_existing:
         return
 
@@ -185,7 +194,12 @@ def set_project_title(project_file: str, title: str, prepend_existing: bool = Fa
 
     # Add an initial version if we need to
     if version_line_index == -1:
-        lines.insert(0, "config_version=5\n")
+        version = 5
+        if (commit is not None and 
+            git.get_merge_base(git.resolve_ref(commit), "4.0-alpha1") 
+            != git.resolve_ref("4.0-alpha1")):
+            version = 4
+        lines.insert(0, f"config_version={version}\n")
         version_line_index = 0
         if title_line_index != -1:
             title_line_index += 1
@@ -329,7 +343,8 @@ def create_project(
         project_name: str = "",
         issue_number: int = -1,
         title: Optional[str] = None,
-        force: bool = False) -> str:
+        force: bool = False,
+        commit: Optional[str] = None) -> str:
     if project_name == "":
         if issue_number != -1:
             project_name = str(issue_number)
@@ -357,20 +372,20 @@ def create_project(
     os.mkdir(project_folder)
     project_file = create_project_file(project_folder)
     if title is not None:
-        set_project_title(project_file, title)
+        set_project_title(project_file, title, commit=commit)
     elif Configuration.AUTOUPDATE_PROJECT_TITLES:
-        set_project_title(project_file, project_name)
+        set_project_title(project_file, project_name, commit=commit)
     return project_file
 
 
-def _get_temp_project_file(source_file: str, title: str) -> str:
+def _get_temp_project_file(source_file: str, title: str, commit: Optional[str] = None) -> str:
     storage.rm(_TEMPORARY_PROJECT_FILE)
     shutil.copy(source_file, _TEMPORARY_PROJECT_FILE)
-    set_project_title(_TEMPORARY_PROJECT_FILE, title)
+    set_project_title(_TEMPORARY_PROJECT_FILE, title, commit=commit)
     return _TEMPORARY_PROJECT_FILE
 
 
-def export_project(project_name: str, export_path: str, title: Optional[str] = None) -> bool:
+def export_project(project_name: str, export_path: str, title: Optional[str] = None, as_is: bool = False) -> bool:
     if project_name == "":
         project_name = _SANDBOX_NAME
 
@@ -394,9 +409,20 @@ def export_project(project_name: str, export_path: str, title: Optional[str] = N
 
     with zipfile.ZipFile(export_path, "w") as f:
         for root, dirs, files in os.walk(project_folder):
+            skip = False
+            root_processed = root
+            while len(root_processed) > 0:
+                if os.path.basename(root_processed) == ".godot":
+                    skip = True
+                    break
+                root_processed = os.path.dirname(root_processed)
+            if skip and not as_is:
+                continue
+
             for dir in dirs:
                 dir_path = os.path.join(root, dir)
-                f.mkdir(os.path.relpath(dir_path, project_folder))
+                if len(os.listdir(dir_path)) == 0:
+                    f.mkdir(os.path.relpath(dir_path, project_folder))
 
             for file in files:
                 file_path = os.path.join(root, file)
@@ -427,9 +453,9 @@ def get_project_name_from_issue_or_file(issue: Optional[int], file_name: str) ->
     return project_name
 
 
-def get_mrp(issue: Optional[int]) -> str:
+def get_mrp(issue: Optional[int], commit: Optional[str]) -> str:
     if issue == -1 or issue is None:
-        return create_project()
+        return create_project(commit=commit)
 
     force_create = False
     folder_name = os.path.join(_PROJECT_FOLDER, f"{issue}")
@@ -484,7 +510,7 @@ def get_mrp(issue: Optional[int]) -> str:
     else:
         print(f"No MRP found in issue #{issue}.")
 
-    return create_project(str(issue), force=force_create)
+    return create_project(str(issue), force=force_create, commit=commit)
 
 
 def _get_menu_choice(

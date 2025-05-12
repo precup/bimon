@@ -378,14 +378,15 @@ def help_command(
             print("  " + "/".join([key_command] + aliases.get(key_command, [])))
 
 
-def export_command(project_name: str, export_path: str, title: Optional[str] = None) -> None:
+def export_command(project_name: str, export_path: str, title: Optional[str] = None, as_is: bool = False) -> None:
     _validate_project_name(project_name)
-    project_manager.export_project(project_name, export_path, title=title)
+    project_manager.export_project(project_name, export_path, title=title, as_is=as_is)
 
 
-def create_command(project_name: str, title: Optional[str] = None) -> None:
+def create_command(project_name: str, three_x: bool, title: Optional[str] = None) -> None:
     _validate_project_name(project_name)
-    project_manager.create_project(project_name, title=title)
+    commit = "3.6-stable" if three_x else "4.0-stable"
+    project_manager.create_project(project_name, title=title, commit=commit)
 
 
 ############################################################################3
@@ -596,11 +597,22 @@ def _parse_flexible_args(
         execution_args = Configuration.DEFAULT_EXECUTION_ARGS
 
     if project is None or project == "":
-        project = project_manager.get_mrp(issue_number)
+        project = project_manager.get_mrp(issue_number, commit)
         if project == "":
             print(terminal.error("Unexpected error acquiring a project."))
             sys.exit(1)
-    elif not project.startswith("http"):
+    elif project.endswith(".zip"):
+        project_name = project_manager.get_project_name_from_issue_or_file(issue_number, project)
+        if project.startswith("http"):
+            if not project_manager.download_project(project, project_name):
+                print(terminal.error("Failed to download zip file."))
+                sys.exit(1)
+            project = project_manager.get_project_path(project_name)
+        else:
+            project = project_manager.extract_project(project, project_name)
+        if project == "":
+            sys.exit(1)
+    else:
         project_name_path = project_manager.get_project_path(project)
         if project_name_path != "" and os.path.exists(project_name_path):
             project = project_name_path
@@ -625,24 +637,13 @@ def _parse_flexible_args(
                 response = input("Create one now? [y/"
                     + terminal.color_key("N") + "]: ")
                 if response.strip().lower().startswith("y"):
-                    project = project_manager.create_project(project)
+                    project = project_manager.create_project(project, commit=commit)
                     if project == "":
                         print(terminal.error("Failed to create project."))
                         sys.exit(1)
                 else:
                     sys.exit(1)
 
-    if project.endswith(".zip"):
-        project_name = project_manager.get_project_name_from_issue_or_file(issue_number, project)
-        if project.startswith("http"):
-            if not project_manager.download_project(project, project_name):
-                print(terminal.error("Failed to download zip file."))
-                sys.exit(1)
-            project = project_manager.get_project_path(project_name)
-        else:
-            project = project_manager.extract_project(project, project_name)
-        if project == "":
-            sys.exit(1)
     if project.endswith("project.godot"):
         project = project[:-len("project.godot")]
 

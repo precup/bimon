@@ -3,18 +3,18 @@ BiMon is a tool for speeding up bug triage for the Godot engine bugsquad. It has
 
 ### How many commits get precompiled?
 You can precompile whatever ranges you choose, every commit or 1 out of every N commits. You can also mix and match the two as you like.
-I initially did a 1 in 128 pass to cut down the number of compiles a bit and then did a full pass from 4.5-dev1 back to 4.0-stable. The first pass produced ~120 versions, the second ~20,000 versions. Doing a hybrid where you do 1 in N for a longer time range and every commit for the last minor version or so also works well; I did that on a second machine.
+I initially did a 1 in 128 pass to cut down the number of compiles a bit and then did a full pass from today (4.5-dev1) back to 4.0-stable. The first pass produced ~120 versions, the second ~20,000 versions. Doing a hybrid where you do 1 in N for a longer time range and every commit for the last minor version or so also works well; I did that on a second machine.
 
 ### What's the performance like?
-**TL;DR: I'm averaging 37 seconds and 7.8 MB per version.** A clean build with no flags takes 9 minutes for me, for reference.
+**TL;DR: With the right compiler flags, I'm averaging 37 seconds and 7.8 MB per version.** A clean build with no flags takes 6-7 minutes for me, for reference.
 
 I wanted to be able to cover everything back to the last major release, which at the moment is 20,000 versions. If you're more reasonable and only go back to the previous minor version, this won't be as much of a concern.
 
- Compiling and storing 20,000 versions of Godot seems a bit ludicrous at first glance. However, similar commits build very quickly and have a lot of overlap that compresses extremely well.
+Compiling and storing 20,000 versions of Godot seems a bit ludicrous at first glance. However, similar commits build very quickly and have a lot of overlap that compresses extremely well.
 
-When I first started looking into this, my clean builds were taking 9 minutes. The current official Linux build is compressed to about 58 MB. Multiplying those by 20k gives you 140 days and 1.2 TB, neither of which are acceptable. 
+Multiplying my clean, flagless build (6.5 minutes) and the current official compressed Linux build size (about 58 MB) by 20k gives you 90 days and 1.2 TB, neither of which are acceptable. 
 
-However, reality is much kinder, for once. With the right flags and incremental builds, I'm averaging 37 seconds and 7.8 MB per version. Multiplying those by 20k gives you 9 days and 160 GB, which is good enough to be usable. Extraction times are ~2 seconds on my machine, a little slow but not awful. For the ~2500 commits back to the last minor version, that's just over a day and about 20 GB, pretty chill.
+However, reality is much kinder. With the right flags and incremental builds, I'm averaging 37 seconds and 7.8 MB per version. Multiplying those by 20k gives you 9 days and 160 GB, which is a lot more manageable. For the ~2500 commits back to the last minor version, that's just over a day and about 20 GB, pretty chill.
 
 1 in N passes have significantly worse performance on both speed and size because the commits are less similar, so it's hard to justify for small N (<= 8) compared to just compiling everything.
 
@@ -33,7 +33,7 @@ BiMon also supports running individual versions if you're just trying to reprodu
 - Time. Expect this to take on the order of days to run for large jobs.
 - Space. Depending on mode and compiler flags, I'd expect between 5 and 20 MB per version; I've been getting ~8 MB.
 > [!WARNING]
-> I only have a Linux and Windows machine. This is heavily used on Linux, lightly tested on Windows, and a mystery on Mac. It *should* work, though?
+> I only have a Linux and Windows machine. This is heavily used on Linux, lightly tested on Windows, and a mystery on Mac. I tried to account for it, but I'm not quite sure how app bundles work.
 
 ## Setup
 1) Clone the BiMon repository and set up a virtualenv:
@@ -104,10 +104,12 @@ To run BiMon, use `./bimon.py [-q/-v/-l] [--color=yes/no] [--config=FILE] [-i] C
 
 - `create` - Creates a new project in the `projects` folder you can use with `run` and `bisect`.
     - `--title TITLE`: The initial title for the project
+    - `-3`: Create a 3.x project instead of a 4.x project
     - `NAME`: The name to refer to this project by for other commands
 
 - `export NAME ZIP` - Exports a project from the `projects` folder to a zip for uploading.
     - `--title TITLE`: Overwrite the project title with `TITLE` on the exported project
+    - `--as-is`: Include the `.godot` folder, which is excluded by default
     - `NAME`: The name of the project to export. Often an issue number.
     - `ZIP`: The destination zip to export to
 
