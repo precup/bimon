@@ -1,12 +1,12 @@
 # BiMon
-BiMon is a tool for speeding up bug triage for the Godot engine bugsquad. It has some nice convenience features, but the main focus is its ability to precompile and cache Godot binaries for use in later bisects.
+BiMon is a tool for speeding up bug triage for the Godot engine bugsquad. It has some nice convenience features, like downloading MRPs from issues and automating bisects based on output or error codes, but the main focus is its ability to precompile and cache Godot binaries for use in later bisects.
 
 ### How many commits get precompiled?
 You can precompile whatever ranges you choose, every commit or 1 out of every N commits. You can also mix and match the two as you like.
 I initially did a 1 in 128 pass to cut down the number of compiles a bit and then did a full pass from today (4.5-dev1) back to 4.0-stable. The first pass produced ~120 versions, the second ~20,000 versions. Doing a hybrid where you do 1 in N for a longer time range and every commit for the last minor version or so also works well; I did that on a second machine.
 
 ### What's the performance like?
-**TL;DR: With the right compiler flags, I'm averaging 37 seconds and 7.8 MB per version.** A clean build with no flags takes 6-7 minutes for me, for reference.
+**TL;DR: With the right compiler flags, I'm averaging 37 seconds and 7.8 MB per version on Linux.** A clean build with no flags takes 6-7 minutes for me, for reference. My Windows builds take ~50% longer across the board but are otherwise similar.
 
 I wanted to be able to cover everything back to the last major release, which at the moment is 20,000 versions. If you're more reasonable and only go back to the previous minor version, this won't be as much of a concern.
 
@@ -14,7 +14,7 @@ Compiling and storing 20,000 versions of Godot seems a bit ludicrous at first gl
 
 Multiplying my clean, flagless build (6.5 minutes) and the current official compressed Linux build size (about 58 MB) by 20k gives you 90 days and 1.2 TB, neither of which are acceptable. 
 
-However, reality is much kinder. With the right flags and incremental builds, I'm averaging 37 seconds and 7.8 MB per version. Multiplying those by 20k gives you 9 days and 160 GB, which is a lot more manageable. For the ~2500 commits back to the last minor version, that's just over a day and about 20 GB, pretty chill.
+However, reality is much kinder. With the right flags and incremental builds, I'm averaging 37 seconds and 7.8 MB per version. Multiplying those by 20k gives you 9 days and 160 GB, which is a lot more manageable. For the ~2500 commits back to the last minor version, that's just over a day and about 20 GB, pretty reasonable.
 
 1 in N passes have significantly worse performance on both speed and size because the commits are less similar, so it's hard to justify for small N (<= 8) compared to just compiling everything.
 
