@@ -55,9 +55,7 @@ def get_bimon_parser(base_command: Optional[str] = None) -> ArgumentParser:
         + f" Defaults to config.ini, falls back to default_{platform}_config.ini.")
     parser.add_argument("-i", "--ignore-old-errors", action="store_true", help=
         "Don't skip commits even if they have been unbuildable in the past")
-    live_default = sys.stdout.isatty() and (
-        os.name != "nt" or base_command is not None and (
-            base_command.startswith("r") or base_command.startswith("b")))
+    live_default = sys.stdout.isatty() and os.name != "nt"
     parser.set_defaults(print_mode=PrintMode.LIVE if live_default else PrintMode.VERBOSE)
     add_messages("", parser)
 

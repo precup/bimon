@@ -15,14 +15,14 @@ from src.config import Configuration, PrintMode
 if os.name == "nt":
     from pyreadline3 import Readline
     readline = Readline()
-    from src.winpty import PtyProcess
+    PtyProcess = int
 else:
     import readline
     from ptyprocess import PtyProcessUnicode as PtyProcess
 
 DEFAULT_OUTPUT_WIDTH = 80
 MAX_OUTPUT_AUTOMATE_SCAN_LINES = 100
-ANSI_RESET = "\001\033[0m\002"
+ANSI_RESET = "\001\033[0m\002" if os.name != "nt" else "\033[0m"
 ANSI_CLEAR_LINE = "\033[2K"
 
 _HISTORY_FILE = os.path.join("state", "history") # TODO circular import avoidance
@@ -248,8 +248,8 @@ def _execute_in_subwindow_pty(
         automate_bad_regex: Optional[re.Pattern],
         automate_crash: Optional[str],
         automate_exit: Optional[str]) -> str:
-    process = PtyProcess.spawn(command, cwd=cwd)
     cols = get_cols()
+    process = PtyProcess.spawn(command, cwd=cwd)
     output_lines = [""]
 
     lines_printed = 0
@@ -282,6 +282,13 @@ def _execute_in_subwindow_pty(
                     time.sleep(0.1)
                 continue
         except EOFError:
+            if mark is None and automation_on:
+                mark = _get_mark_from_lines(
+                    output_lines,
+                    automate_good,
+                    automate_good_regex,
+                    automate_bad,
+                    automate_bad_regex)
             break
 
         if signal_handler.soft_killed() and not already_soft_killed:
@@ -353,7 +360,7 @@ def execute_in_subwindow_with_automation(
             if path_locator is not None:
                 command[0] = path_locator
 
-    if Configuration.PRINT_MODE == PrintMode.LIVE:
+    if Configuration.PRINT_MODE == PrintMode.LIVE and os.name != "nt":
         return _execute_in_subwindow_pty(
             command,
             title,
@@ -405,6 +412,7 @@ def _execute_directly(
 
     process = subprocess.Popen(
         command,
+        stdin=subprocess.DEVNULL,
         stdout=stdout,
         stderr=stderr,
         text=True,
@@ -665,6 +673,8 @@ def color_bg(text: str, color_str: str) -> str:
 def _color_by_code(text: str, color_code: str) -> str:
     if not Configuration.COLOR_ENABLED:
         return text
+    if os.name == "nt":
+        return f"\033[{color_code}m{text}" + ANSI_RESET
     return f"\001\033[{color_code}m\002{text}" + ANSI_RESET
 
 

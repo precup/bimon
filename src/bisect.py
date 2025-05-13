@@ -109,19 +109,19 @@ class Bisector:
                 commit = git.get_merge_base(
                     list(sorted(short_goods))[0], 
                     list(sorted(short_bads))[0])
-                print(terminal.warn("Good commits weren't ancestors of bad commits."))
                 if commit != "":
                     commit = git.get_short_name(commit)
-                    print("If the number of possible commits seems too high,"
-                        + f" try {commit} instead.")
+                    print(terminal.warn("Good commits weren't ancestors of bad commits."
+                        + " If the number of possible commits seems too high,"
+                        + f" try {commit} instead."))
 
         for bad in short_bads:
             for good in short_goods:
                 if git.is_ancestor(bad, good):
                     good_name = git.get_short_name(good)
                     bad_name = git.get_short_name(bad)
-                    print(terminal.warn(f"{bad_name} (bad) is an ancestor of {good_name} (good)."))
-                    print(terminal.warn(
+                    print(terminal.error(f"{bad_name} (bad) is an ancestor of {good_name} (good)."))
+                    print(terminal.error(
                         "This makes the bisect impossible, please check your commits. Ignoring."))
                     return False
 
@@ -180,7 +180,6 @@ class Bisector:
             return None, Bisector.CommandResult.ERROR
         bisect_commits = [commit for commit in bisect_commits if commit not in self._bads]
         if len(bisect_commits) == 0:
-            valid = True
             for parent in git.get_parents(bad):
                 if not self._path_spec and parent not in self._goods and not any(
                         git.is_ancestor(parent, good) for good in self._goods):
@@ -214,7 +213,7 @@ class Bisector:
                 print("Switching back to searching precompiled commits.")
                 self._phase_two = False
             bisect_commits = present_bisect_versions
-        elif not silent:
+        elif not silent and not self._phase_two:
             print("No more useful precompiled commits to test.")
             if self._cache_only:
                 print("Cache only mode, exiting.")
@@ -272,7 +271,6 @@ class Bisector:
             exit: Optional[str] = None,
             script: Optional[str] = None,
             regex: bool = False) -> CommandResult:
-
         if good is None:
             self._automate_good = None
         else:

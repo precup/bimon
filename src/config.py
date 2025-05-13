@@ -120,6 +120,7 @@ class Configuration:
 			"Execution", "executable_path")
         if config.getboolean("Execution", "executable_regex"):
             Configuration.EXECUTABLE_REGEX = re.compile(Configuration.EXECUTABLE_PATH)
+            Configuration.EXECUTABLE_PATH = None
         else:
             Configuration.EXECUTABLE_REGEX = None
         Configuration.AUTOPURGE_DUPLICATES = config.getboolean(

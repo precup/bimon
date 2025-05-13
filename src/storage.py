@@ -155,17 +155,21 @@ def _extract_version(version: str, target: str) -> bool:
 
 def find_executable(
         base_folder: str,
-        likely_location: str,
-        backup_path_regex: re.Pattern) -> Optional[str]:
-    likely_location = os.path.join(base_folder, likely_location)
-    if os.path.exists(likely_location):
-        return likely_location
+        likely_location: Optional[str],
+        backup_path_regex: Optional[re.Pattern]) -> Optional[str]:
+    if likely_location is not None:
+        likely_location = os.path.join(base_folder, likely_location)
+        if os.path.exists(likely_location):
+            return likely_location
 
-    for root, _, files in os.walk(base_folder):
-        for file in files:
-            full_path = os.path.join(root, file)
-            if backup_path_regex.search(full_path):
-                return full_path
+    if backup_path_regex is not None:
+        for root, _, files in os.walk(base_folder):
+            for file in files:
+                full_path = os.path.join(root, file)
+                rel_path = os.path.relpath(full_path, base_folder)
+                re_match = backup_path_regex.match(rel_path)
+                if re_match is not None and re_match.end() == len(rel_path):
+                    return full_path
 
     return None
 

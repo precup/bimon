@@ -149,11 +149,11 @@ To run BiMon, use `./bimon.py [-q/-v/-l] [--color=yes/no] [--config=FILE] [-i] C
 
 ### Print flags:
 The `-q`/`--quiet`, `-l`/`--live`, and `-v`/`--verbose` flags may be provided before the command; they are mutually exclusive and specify the print mode.
-- Live mode shows a live updating display of the tail of long running subprocesses, like scons. 
+- Live mode shows a live updating display of the tail of long running subprocesses, like scons. Does not work on Windows, falls back to -v.
 - Quiet mode hides any output from those subprocesses. 
 - Verbose mode prints the output from those subprocesses.
 
-If no print mode is specified, live mode is used for TTYs and verbose mode is used otherwise. If you have issues with subprocesses, use something other than live mode.
+If no print mode is specified, live mode is used for non Windows TTYs and verbose mode is used otherwise. If you have issues with subprocesses, use something other than live mode.
 
 ### Compiler errors
 If a commit has compile errors but several successful other compiles have occurred, BiMon will assume there's something wrong with the commit itself and add it to the `compile_error_commits` file. These commits will be skipped for most purposes in the future unless specifically requested or the `-i`/`--ignore-old-errors` flag is provided.
@@ -197,17 +197,17 @@ Bisection proceeds in two phases, where the range is first narrowed down as much
 ## TODO
 
 #### Known Issues
-- Occassionally gets stuck when running a subprocess in live mode on Windows, proceeds after any input
-    - Windows currently uses `VERBOSE` mode for `update` by default as a result
+- Live mode does not work on Windows, falls back to VERBOSE.
 - Multiple instances running at once is not safe
 - Corrupted build artifacts/extractions aren't handled at all
-- Killing the extraction threads might litter the version space, hasn't been a problem *yet*
+- Killing the extraction threads might litter the version folder, but it hasn't been a problem *yet*
 - SIGINT doesn't print if triggered in the middle of another print
 - Minor formatting issues on SIGINT while in live mode
 
 #### Maybe Someday
 - Non interactive bisect mode
 - Make more general so this isn't just a Godot specific tool
+- Live mode on Windows
 - Sentinel usage cleanup
 - git.py and bisect.py cleanup
 - Switch path-spec to being input with -- like git

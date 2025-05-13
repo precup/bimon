@@ -8,7 +8,7 @@ from src import parsers
 from src import release_processor
 from src import storage
 from src import terminal
-from src.config import Configuration
+from src.config import Configuration, PrintMode
 
 
 def main() -> None:
@@ -60,6 +60,9 @@ def _setup_configuration(args, original_wd: str) -> None:
     Configuration.COLOR_ENABLED = args.color
     if args.print_mode is not None:
         Configuration.PRINT_MODE = args.print_mode
+    if Configuration.PRINT_MODE == PrintMode.LIVE and os.name == "nt":
+        print(terminal.warn("Live mode is not supported on Windows, sorry. Falling back to verbose."))
+        Configuration.PRINT_MODE == PrintMode.VERBOSE
 
 
 def _ensure_workspace(args, workspace: str, git_address: str) -> bool:

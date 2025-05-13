@@ -198,7 +198,7 @@ def bisect_command(
                 continue
             terminal.add_to_history(command)
             try:
-                split_args = shlex.split(command, posix='nt' != os.name)
+                split_args = shlex.split(command)
                 clean_args = parsers.preparse_bisect_command(split_args)
 
                 if len(clean_args) == 0:
